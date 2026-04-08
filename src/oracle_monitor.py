@@ -178,12 +178,14 @@ class OracleMonitor:
             latest = yt.get("latest")
             if latest:
                 yt_section = (
-                    f"\n\n🎥 *YouTube {yt['channel']}*\n"
+                    f"\n\n🎥 *Neues Video – {yt['channel']}*\n"
                     f"📺 _{latest['title']}_\n"
                     f"📅 {latest['published']} | 🔗 {latest['url']}"
                 )
+            elif yt.get("already_seen"):
+                yt_section = f"\n\n🎥 *YouTube {yt['channel']}:* Kein neues Video seit letztem Heartbeat."
             else:
-                yt_section = f"\n\n🎥 *YouTube:* {yt['status']}"
+                yt_section = f"\n\n🎥 *YouTube:* {yt.get('status', 'aktiv')}"
 
         return (
             f"{'💚' if instance['found'] else '💛'} *Heartbeat – {now}*\n\n"

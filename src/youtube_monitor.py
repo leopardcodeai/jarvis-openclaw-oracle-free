@@ -156,6 +156,7 @@ class YouTubeMonitor:
         self._channel_id: str | None = None
         self._check_interval = 3600  # 1 Stunde
         self._state = _load_state()
+        self._heartbeat_last_shown: str | None = None  # video_id last shown in heartbeat
 
     def start(self):
         if self._task is None or self._task.done():
@@ -222,14 +223,29 @@ class YouTubeMonitor:
                 logger.info(f"YouTube init: latest video = {video['title']}")
 
     async def get_status(self) -> dict:
-        """Get current status for heartbeat."""
+        """Get current status for heartbeat.
+        Only returns 'latest' if it's a video not yet shown via heartbeat.
+        Marks it as shown after returning it.
+        """
         if not self._channel_id:
             return {"channel": CHANNEL_HANDLE, "status": "Channel ID nicht aufgelöst", "latest": None}
 
         video = await fetch_latest_video(self._channel_id)
+        if not video:
+            return {"channel": CHANNEL_HANDLE, "channel_id": self._channel_id,
+                    "status": "aktiv", "latest": None}
+
+        # Only show in heartbeat if not yet shown
+        if video["video_id"] == self._heartbeat_last_shown:
+            return {"channel": CHANNEL_HANDLE, "channel_id": self._channel_id,
+                    "status": "aktiv", "latest": None, "already_seen": True}
+
+        # Mark as shown
+        self._heartbeat_last_shown = video["video_id"]
         return {
             "channel": CHANNEL_HANDLE,
             "channel_id": self._channel_id,
             "status": "aktiv",
-            "latest": video
+            "latest": video,
+            "already_seen": False,
         }
