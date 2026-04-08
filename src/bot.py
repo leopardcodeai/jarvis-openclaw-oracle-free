@@ -932,12 +932,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 context_parts.append(format_weather_for_llm(weather_data))
                 logger.info("Auto-weather: no city, text fallback")
 
-    # System stats detection
-    _SYS_TRIGGERS = ["auslastung", "cpu", "ram", "speicher", "arbeitsspeicher",
-                     "system stats", "systemstatus", "ressourcen", "disk usage",
-                     "wie viel ram", "wie viel cpu", "prozessor auslastung",
-                     "server auslastung", "server load", "uptime"]
-    if any(t in msg_lower for t in _SYS_TRIGGERS):
+    # System stats detection (use word boundaries for short ambiguous words)
+    _SYS_EXACT = ["auslastung", "system stats", "systemstatus", "ressourcen",
+                  "disk usage", "wie viel ram", "wie viel cpu", "prozessor auslastung",
+                  "server auslastung", "server load", "arbeitsspeicher", "speicher auslastung"]
+    _SYS_WORD = ["cpu", "ram", "uptime", "speicher"]
+    import re as _re
+    _sys_hit = (any(t in msg_lower for t in _SYS_EXACT)
+                or any(_re.search(rf'\b{t}\b', msg_lower) for t in _SYS_WORD))
+    if _sys_hit:
         stats = get_system_stats()
         await update.message.reply_text(format_system_stats(stats), parse_mode="Markdown")
         context_parts.append(
