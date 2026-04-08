@@ -21,6 +21,7 @@ from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import (run_command as sys_run, format_result as sys_format_result,
                        ALLOWED_COMMAND_KEYS, get_system_stats, format_system_stats)
 from .youtube_monitor import resolve_channel_id as yt_resolve_channel_id
+from .voice_transcriber import transcribe_voice
 from .script_runner import (
     run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
     update_last_output, extract_script_from_response,
@@ -1052,6 +1053,42 @@ async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(msg, parse_mode=None)
 
 
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice messages: transcribe with Whisper then process as text."""
+    if not is_authorized(update.effective_user.id):
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    try:
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        ogg_bytes = await voice_file.download_as_bytearray()
+
+        status_msg = await update.message.reply_text("🎙 Transkribiere...", parse_mode=None)
+
+        text, lang = await transcribe_voice(bytes(ogg_bytes))
+
+        await status_msg.delete()
+
+        if not text:
+            await update.message.reply_text("❌ Konnte Sprache nicht erkennen.")
+            return
+
+        lang_label = {"de": "🇩🇪 Deutsch", "en": "🇬🇧 English"}.get(lang, f"🌐 {lang}")
+        await update.message.reply_text(
+            f"🎙 _{lang_label}_: {text}",
+            parse_mode="Markdown"
+        )
+
+        # Process transcribed text exactly like a normal text message
+        update.message.text = text
+        await handle_message(update, context)
+
+    except Exception as e:
+        logger.error(f"Voice handler error: {e}")
+        await update.message.reply_text("❌ Fehler bei der Spracherkennung.")
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors."""
     logger.error(f"Error: {context.error}")
@@ -1115,9 +1152,10 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("setprompt", setprompt_command))
     application.add_handler(CommandHandler("resetprompt", resetprompt_command))
     
-    # Message handler
+    # Message handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+
     # Error handler
     application.add_error_handler(error_handler)
     

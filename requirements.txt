@@ -2,6 +2,7 @@
 python-telegram-bot==21.3
 httpx
 psutil>=5.9.0
+openai-whisper>=20231117
 pydantic==2.7.1
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
