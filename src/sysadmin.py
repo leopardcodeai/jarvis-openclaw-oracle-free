@@ -47,10 +47,15 @@ def get_system_stats() -> dict:
     except Exception:
         pass
 
+    # macOS often returns bogus low MHz values – only show if plausible (> 100 MHz)
+    freq_mhz = None
+    if freq and freq.current > 100:
+        freq_mhz = round(freq.current)
+
     return {
         "cpu_pct": cpu,
         "cpu_cores": cpu_count,
-        "cpu_freq_mhz": round(freq.current) if freq else None,
+        "cpu_freq_mhz": freq_mhz,
         "ram_used_gb": round(mem.used / 1e9, 1),
         "ram_total_gb": round(mem.total / 1e9, 1),
         "ram_pct": mem.percent,
@@ -77,7 +82,15 @@ def format_system_stats(s: dict) -> str:
             f"  💾 VRAM: `{g['mem_used_mb']} / {g['mem_total_mb']} MB`"
         )
 
-    cpu_freq = f" @ {s['cpu_freq_mhz']} MHz" if s.get("cpu_freq_mhz") else ""
+    if s.get("cpu_freq_mhz"):
+        mhz = s["cpu_freq_mhz"]
+        if mhz >= 1000:
+            cpu_freq = f" @ {mhz/1000:.1f} GHz"
+        else:
+            cpu_freq = f" @ {mhz} MHz"
+    else:
+        cpu_freq = ""
+
     return (
         f"🖥 *System-Auslastung* | `{s['node']}` ({s['os']})\n"
         f"⏱ Uptime: `{s['uptime']}`\n\n"

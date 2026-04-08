@@ -888,11 +888,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                      "server auslastung", "server load", "uptime"]
     if any(t in msg_lower for t in _SYS_TRIGGERS):
         stats = get_system_stats()
-        context_parts.append(
-            f"[ECHTZEIT-SYSTEMDATEN – nutze diese Werte direkt, keine Schätzungen!]\n"
-            + format_system_stats(stats).replace("*", "").replace("`", "")
-        )
         await update.message.reply_text(format_system_stats(stats), parse_mode="Markdown")
+        context_parts.append(
+            "[SYSTEM-STATS BEREITS ALS NACHRICHT GESENDET – nicht wiederholen! "
+            "Nur kurz bestätigen oder auf konkrete Folgefragen eingehen.]"
+        )
         logger.info("Auto-sysstat sent")
 
     # Crypto detection
