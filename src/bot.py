@@ -744,7 +744,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    
+
+    # Intercept heartbeat/status text messages → call real command directly
+    if user_message.strip().lower() in ("heartbeat", "/heartbeat", "status", "heartbeat status"):
+        await heartbeat_command(update, context)
+        return
+
     # Auto tool detection based on message content
     context_parts = []
     msg_lower = user_message.lower()
@@ -1039,8 +1044,12 @@ async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         msg = await oracle_monitor.send_heartbeat(youtube_monitor)
     else:
         msg = "⚠️ Oracle Monitor nicht aktiv."
-    
-    await update.message.reply_text(msg, parse_mode="Markdown")
+
+    try:
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception:
+        # Fallback: send without Markdown if formatting fails
+        await update.message.reply_text(msg, parse_mode=None)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -184,6 +184,14 @@ class YouTubeMonitor:
             else:
                 logger.warning(f"YouTube: could not resolve channel ID for {CHANNEL_HANDLE} – set YOUTUBE_CHANNEL_ID in .env")
 
+        # Pre-seed heartbeat seen IDs with current videos so first /heartbeat
+        # doesn't flood with all 15 RSS entries
+        if self._channel_id:
+            videos = await fetch_recent_videos(self._channel_id)
+            for v in videos:
+                self._heartbeat_seen_ids.add(v["video_id"])
+            logger.info(f"YouTube: pre-seeded {len(self._heartbeat_seen_ids)} video IDs for heartbeat")
+
         while True:
             try:
                 await self._check_and_notify()
