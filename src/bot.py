@@ -19,6 +19,7 @@ from .finance import get_crypto_price, get_stock_price, format_crypto, format_st
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
+from .youtube_monitor import resolve_channel_id as yt_resolve_channel_id
 from .script_runner import (
     run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
     update_last_output, extract_script_from_response,
@@ -456,6 +457,41 @@ async def tempgraph_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         caption=caption,
         parse_mode="Markdown"
     )
+
+
+async def ytid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ytid <url_or_handle> – resolve YouTube channel ID automatically."""
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Verwendung: `/ytid <channel-url oder @handle>`\n\n"
+            "Beispiele:\n"
+            "`/ytid @airevolutionx`\n"
+            "`/ytid https://www.youtube.com/@MrBeast`\n"
+            "`/ytid youtube.com/@mkbhd`",
+            parse_mode="Markdown"
+        )
+        return
+
+    query = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await update.message.reply_text(f"🔍 Suche Channel ID für `{query}`...", parse_mode="Markdown")
+
+    channel_id = await yt_resolve_channel_id(query)
+    if channel_id:
+        await update.message.reply_text(
+            f"✅ *Channel ID gefunden:*\n\n"
+            f"`{channel_id}`\n\n"
+            f"In `.env` eintragen:\n`YOUTUBE_CHANNEL_ID={channel_id}`",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ Konnte keine Channel ID für `{query}` finden.\n"
+            f"Tipp: Versuche die vollständige URL: `https://www.youtube.com/@handle`",
+            parse_mode="Markdown"
+        )
 
 
 async def scripts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1039,6 +1075,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
+    application.add_handler(CommandHandler("ytid", ytid_command))
     application.add_handler(CommandHandler("scripts", scripts_command))
     application.add_handler(CommandHandler("runscript", runscript_command))
     application.add_handler(CommandHandler("delscript", delscript_command))

@@ -17,23 +17,88 @@ STATE_FILE = Path("youtube_state.json")
 RSS_NS = "http://www.w3.org/2005/Atom"
 
 
-async def _resolve_channel_id() -> str | None:
-    """Fetch channel page and extract channel ID from HTML."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; Jarvis/1.0)"
-        }) as client:
-            resp = await client.get(CHANNEL_URL, follow_redirects=True)
-            match = re.search(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"', resp.text)
-            if match:
-                return match.group(1)
-            # Fallback: externalId
-            match = re.search(r'"externalId":"(UC[a-zA-Z0-9_-]{22})"', resp.text)
-            if match:
-                return match.group(1)
-    except Exception as e:
-        logger.error(f"Failed to resolve channel ID: {e}")
+async def resolve_channel_id(handle_or_url: str) -> str | None:
+    """Resolve a YouTube channel handle or URL to a channel ID.
+    Tries multiple methods in order:
+    1. Free Piped API (no key required)
+    2. yt.lemnoslife.com noKey API
+    3. Direct YouTube page scrape with browser headers
+    """
+    # Normalise: extract handle from URL if needed
+    handle = handle_or_url.strip()
+    for prefix in ["https://www.youtube.com/", "https://youtube.com/", "http://"]:
+        handle = handle.replace(prefix, "")
+    handle = handle.split("?")[0].rstrip("/")
+    if not handle.startswith("@"):
+        # Already a channel ID?
+        if re.match(r'^UC[a-zA-Z0-9_-]{22}$', handle):
+            return handle
+        handle = "@" + handle
+
+    channel_url = f"https://www.youtube.com/{handle}"
+
+    headers_browser = {
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/124.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        # Method 1: Piped API (open-source YouTube frontend)
+        try:
+            piped = await client.get(
+                f"https://pipedapi.kavin.rocks/channel/{handle.lstrip('@')}"
+            )
+            if piped.status_code == 200:
+                data = piped.json()
+                cid = data.get("id", "")
+                if re.match(r'^UC[a-zA-Z0-9_-]{22}$', cid):
+                    logger.info(f"Resolved via Piped: {handle} → {cid}")
+                    return cid
+        except Exception:
+            pass
+
+        # Method 2: yt.lemnoslife.com noKey API
+        try:
+            lemon = await client.get(
+                "https://yt.lemnoslife.com/noKey/channels",
+                params={"handle": handle}
+            )
+            if lemon.status_code == 200:
+                items = lemon.json().get("items", [])
+                if items:
+                    cid = items[0].get("id", "")
+                    if re.match(r'^UC[a-zA-Z0-9_-]{22}$', cid):
+                        logger.info(f"Resolved via lemnoslife: {handle} → {cid}")
+                        return cid
+        except Exception:
+            pass
+
+        # Method 3: YouTube page scrape with browser headers
+        try:
+            resp = await client.get(channel_url, headers=headers_browser)
+            for pattern in [
+                r'"channelId":"(UC[a-zA-Z0-9_-]{22})"',
+                r'"externalId":"(UC[a-zA-Z0-9_-]{22})"',
+                r'channel/(UC[a-zA-Z0-9_-]{22})',
+                r'"browseId":"(UC[a-zA-Z0-9_-]{22})"',
+            ]:
+                m = re.search(pattern, resp.text)
+                if m:
+                    logger.info(f"Resolved via scrape: {handle} → {m.group(1)}")
+                    return m.group(1)
+        except Exception as e:
+            logger.error(f"Scrape failed for {handle}: {e}")
+
+    logger.warning(f"Could not resolve channel ID for {handle}")
     return None
+
+
+async def _resolve_channel_id() -> str | None:
+    """Resolve the default monitored channel."""
+    return await resolve_channel_id(CHANNEL_URL)
 
 
 async def fetch_latest_video(channel_id: str) -> dict | None:
