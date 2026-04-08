@@ -18,7 +18,8 @@ from .weather import get_weather, format_weather, format_weather_for_llm
 from .finance import get_crypto_price, get_stock_price, format_crypto, format_stock, format_for_llm as format_finance_llm, COINGECKO_IDS
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
-from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
+from .sysadmin import (run_command as sys_run, format_result as sys_format_result,
+                       ALLOWED_COMMAND_KEYS, get_system_stats, format_system_stats)
 from .youtube_monitor import resolve_channel_id as yt_resolve_channel_id
 from .script_runner import (
     run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
@@ -879,6 +880,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if weather_data:
                 context_parts.append(format_weather_for_llm(weather_data))
                 logger.info("Auto-weather: no city, text fallback")
+
+    # System stats detection
+    _SYS_TRIGGERS = ["auslastung", "cpu", "ram", "speicher", "arbeitsspeicher",
+                     "system stats", "systemstatus", "ressourcen", "disk usage",
+                     "wie viel ram", "wie viel cpu", "prozessor auslastung",
+                     "server auslastung", "server load", "uptime"]
+    if any(t in msg_lower for t in _SYS_TRIGGERS):
+        stats = get_system_stats()
+        context_parts.append(
+            f"[ECHTZEIT-SYSTEMDATEN – nutze diese Werte direkt, keine Schätzungen!]\n"
+            + format_system_stats(stats).replace("*", "").replace("`", "")
+        )
+        await update.message.reply_text(format_system_stats(stats), parse_mode="Markdown")
+        logger.info("Auto-sysstat sent")
 
     # Crypto detection
     if any(t in msg_lower for t in CRYPTO_TRIGGERS):

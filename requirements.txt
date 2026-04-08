@@ -1,6 +1,7 @@
 # OpenClaw - AI Assistant Dependencies
 python-telegram-bot==21.3
-httpx==0.27.0
+httpx
+psutil>=5.9.0
 pydantic==2.7.1
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
