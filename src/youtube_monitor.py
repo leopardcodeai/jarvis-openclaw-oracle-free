@@ -7,6 +7,8 @@ from pathlib import Path
 
 import httpx
 
+from .config import settings
+
 logger = logging.getLogger(__name__)
 
 CHANNEL_HANDLE = "@airevolutionx"
@@ -100,13 +102,17 @@ class YouTubeMonitor:
             self._task.cancel()
 
     async def _monitor_loop(self):
-        # Resolve channel ID once on startup
+        # Use hardcoded channel ID from config if available, otherwise scrape
         await asyncio.sleep(15)
-        self._channel_id = await _resolve_channel_id()
-        if self._channel_id:
-            logger.info(f"YouTube: resolved {CHANNEL_HANDLE} → {self._channel_id}")
+        if settings.youtube_channel_id:
+            self._channel_id = settings.youtube_channel_id
+            logger.info(f"YouTube: using configured channel ID {self._channel_id}")
         else:
-            logger.warning(f"YouTube: could not resolve channel ID for {CHANNEL_HANDLE}")
+            self._channel_id = await _resolve_channel_id()
+            if self._channel_id:
+                logger.info(f"YouTube: resolved {CHANNEL_HANDLE} → {self._channel_id}")
+            else:
+                logger.warning(f"YouTube: could not resolve channel ID for {CHANNEL_HANDLE} – set YOUTUBE_CHANNEL_ID in .env")
 
         while True:
             try:
