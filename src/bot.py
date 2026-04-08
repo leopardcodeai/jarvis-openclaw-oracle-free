@@ -776,6 +776,18 @@ async def ghpush_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"❌ Fehler: {result['error']}")
 
 
+async def safe_reply(message, text: str, **kwargs) -> None:
+    """Send reply with Markdown, fall back to plain text on parse error."""
+    try:
+        await message.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception:
+        try:
+            await message.reply_text(text, parse_mode=None, **kwargs)
+        except Exception as e:
+            logger.error(f"safe_reply failed: {e}")
+            await message.reply_text("❌ Antwort konnte nicht gesendet werden.", parse_mode=None)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, override_text: str | None = None) -> None:
     """Handle incoming text messages."""
     user = update.effective_user
@@ -1046,9 +1058,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
     else:
         messages = conversations.get_messages(user_id)
 
-    # Call LLM
+    # Call LLM – with fallback retry if content is empty
     response = await router.chat(messages, system_prompt)
-    
+
+    if response.success and not response.content:
+        # Empty content (e.g. Gemini safety block) – retry via OpenRouter directly
+        logger.warning("Empty LLM content, retrying via OpenRouter")
+        response = await router._call_openrouter(messages)
+    if response.success and not response.content:
+        # Still empty – try Ollama
+        logger.warning("Still empty, trying Ollama")
+        response = await router._call_ollama(messages)
+
     if not response.success or not response.content:
         error_msg = "❌ Entschuldigung, ich konnte keine Antwort generieren. Bitte versuche es später erneut."
         logger.error(f"LLM error: {response.error or 'empty content'}")
@@ -1193,24 +1214,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 )
             }]
             interp = await router.chat(interp_messages, system_prompt)
-            if interp.success:
+            if interp.success and interp.content:
                 reply_text = interp.content
                 if len(reply_text) > 4000:
                     reply_text = reply_text[:4000] + "\n_(gekürzt)_"
-                await update.message.reply_text(reply_text, parse_mode="Markdown")
+                await safe_reply(update.message, reply_text)
                 conversations.add_message(user_id, "assistant", response.content + "\n\n" + interp.content)
                 return
 
     # ── Normal response ───────────────────────────────────────────────────────
-    # Add assistant response to history
     conversations.add_message(user_id, "assistant", response.content)
-
-    # Telegram has a 4096 character limit
     reply_text = response.content
     if len(reply_text) > 4000:
         reply_text = reply_text[:4000] + "\n\n_(Nachricht gekürzt)_"
-
-    await update.message.reply_text(reply_text, parse_mode="Markdown")
+    await safe_reply(update.message, reply_text)
 
 
 async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
