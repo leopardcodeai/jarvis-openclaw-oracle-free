@@ -125,21 +125,44 @@ async def run_plugin(name: str, query: str) -> str | None:
 
 # ── Plugin file writing ────────────────────────────────────────────────────────
 
-PLUGIN_MARKER = r"\[JARVIS_PLUGIN:\s*name=([^,\]]+)(?:,\s*description=([^\],]+))?(?:,\s*packages=([^\]]+))?\]"
+PLUGIN_MARKER = r"\[JARVIS_PLUGIN:[^\n]*\]"  # greedy to last ] on the line
 
 
 def extract_plugin_from_response(response: str) -> dict | None:
     """Extract plugin definition from LLM response."""
-    marker = re.search(PLUGIN_MARKER, response, re.IGNORECASE)
-    if not marker:
+    marker_match = re.search(PLUGIN_MARKER, response, re.IGNORECASE)
+    if not marker_match:
         return None
+    marker_str = marker_match.group(0)
+
+    # Parse fields from marker string directly (handles brackets inside values)
+    name = re.search(r"name=([^,\]]+)", marker_str)
+    description = re.search(r"description=([^,\]]+)", marker_str)
+    packages_raw = re.search(r"packages=(.+?)(?=,\s*\w+=|\]$)", marker_str)
+
+    if not name:
+        return None
+
+    # Restore incomplete brackets in package names e.g. qrcode[pil → qrcode[pil]
+    raw_pkgs = packages_raw.group(1).strip() if packages_raw else ""
+    packages = []
+    for p in raw_pkgs.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        # Restore missing closing bracket: qrcode[pil → qrcode[pil]
+        if p.count("[") > p.count("]"):
+            p += "]"
+        packages.append(p)
+
     code_match = re.search(r"```python\s*([\s\S]+?)```", response)
     if not code_match:
         return None
+
     return {
-        "name": marker.group(1).strip().replace(" ", "_"),
-        "description": (marker.group(2) or "").strip(),
-        "packages": [p.strip() for p in (marker.group(3) or "").split(",") if p.strip()],
+        "name": name.group(1).strip().replace(" ", "_"),
+        "description": (description.group(1).strip() if description else ""),
+        "packages": packages,
         "code": code_match.group(1).strip(),
     }
 
