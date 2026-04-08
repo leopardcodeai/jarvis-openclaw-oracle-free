@@ -765,7 +765,7 @@ async def ghpush_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"❌ Fehler: {result['error']}")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, override_text: str | None = None) -> None:
     """Handle incoming text messages."""
     user = update.effective_user
     user_id = user.id
@@ -774,7 +774,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("⛔ Du bist nicht berechtigt, diesen Bot zu nutzen.")
         return
     
-    user_message = update.message.text
+    user_message = override_text or update.message.text
     logger.info(f"Message from {user.first_name} ({user_id}): {user_message[:50]}...")
     
     # Show typing indicator
@@ -1244,8 +1244,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         # Process transcribed text exactly like a normal text message
-        update.message.text = text
-        await handle_message(update, context)
+        await handle_message(update, context, override_text=text)
 
     except Exception as e:
         import traceback
