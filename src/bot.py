@@ -1200,7 +1200,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
         stdout = run_result.get("stdout", "") or ""
         if stdout.startswith("JARVIS_IMAGE:"):
             import base64 as _b64
-            img_data = _b64.b64decode(stdout[len("JARVIS_IMAGE:"):].strip())
+            raw = stdout[len("JARVIS_IMAGE:"):].strip()
+            # Fix base64 padding (common issue when LLM or script omits trailing =)
+            raw += "=" * (-len(raw) % 4)
+            try:
+                img_data = _b64.b64decode(raw)
+            except Exception as _e:
+                logger.error(f"base64 decode failed: {_e}")
+                await update.message.reply_text(
+                    f"❌ Bild konnte nicht dekodiert werden: `{_e}`", parse_mode="Markdown"
+                )
+                return
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=img_data,
