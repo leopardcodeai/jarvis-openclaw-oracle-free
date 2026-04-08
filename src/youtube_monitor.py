@@ -101,36 +101,40 @@ async def _resolve_channel_id() -> str | None:
     return await resolve_channel_id(CHANNEL_URL)
 
 
-async def fetch_latest_video(channel_id: str) -> dict | None:
-    """Fetch latest video from YouTube RSS feed."""
+async def fetch_recent_videos(channel_id: str, max_results: int = 15) -> list[dict]:
+    """Fetch recent videos from YouTube RSS feed (up to max_results)."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
-                return None
+                return []
 
         root = ET.fromstring(resp.text)
         ns = {"atom": RSS_NS, "yt": "http://www.youtube.com/xml/schemas/2015"}
-        entry = root.find("atom:entry", ns)
-        if entry is None:
-            return None
-
-        video_id = entry.findtext("yt:videoId", namespaces=ns)
-        title = entry.findtext("atom:title", namespaces=ns)
-        link_el = entry.find("atom:link", ns)
-        link = link_el.attrib.get("href") if link_el is not None else f"https://youtu.be/{video_id}"
-        published = entry.findtext("atom:published", namespaces=ns, default="")
-
-        return {
-            "video_id": video_id,
-            "title": title,
-            "url": link,
-            "published": published[:10] if published else ""
-        }
+        videos = []
+        for entry in root.findall("atom:entry", ns)[:max_results]:
+            video_id = entry.findtext("yt:videoId", namespaces=ns)
+            title = entry.findtext("atom:title", namespaces=ns)
+            link_el = entry.find("atom:link", ns)
+            link = link_el.attrib.get("href") if link_el is not None else f"https://youtu.be/{video_id}"
+            published = entry.findtext("atom:published", namespaces=ns, default="")
+            videos.append({
+                "video_id": video_id,
+                "title": title,
+                "url": link,
+                "published": published[:10] if published else ""
+            })
+        return videos
     except Exception as e:
         logger.error(f"Failed to fetch YouTube RSS: {e}")
-        return None
+        return []
+
+
+async def fetch_latest_video(channel_id: str) -> dict | None:
+    """Fetch latest video (convenience wrapper)."""
+    videos = await fetch_recent_videos(channel_id, max_results=1)
+    return videos[0] if videos else None
 
 
 def _load_state() -> dict:
@@ -156,7 +160,7 @@ class YouTubeMonitor:
         self._channel_id: str | None = None
         self._check_interval = 3600  # 1 Stunde
         self._state = _load_state()
-        self._heartbeat_last_shown: str | None = None  # video_id last shown in heartbeat
+        self._heartbeat_seen_ids: set[str] = set()  # video_ids already shown in heartbeat
 
     def start(self):
         if self._task is None or self._task.done():
@@ -195,57 +199,62 @@ class YouTubeMonitor:
             if not self._channel_id:
                 return
 
-        video = await fetch_latest_video(self._channel_id)
-        if not video:
+        videos = await fetch_recent_videos(self._channel_id)
+        if not videos:
             return
 
-        last_seen = self._state.get(CHANNEL_HANDLE)
+        # State stores a set of known video IDs
+        known = self._state.get(CHANNEL_HANDLE + "_known", [])
+        known_set = set(known)
+        is_init = not known_set
 
-        if last_seen != video["video_id"]:
-            self._state[CHANNEL_HANDLE] = video["video_id"]
+        new_videos = [v for v in videos if v["video_id"] not in known_set]
+
+        if new_videos:
+            # Update known set with all current video IDs
+            all_ids = [v["video_id"] for v in videos]
+            self._state[CHANNEL_HANDLE + "_known"] = all_ids
+            # Keep legacy key for compatibility
+            self._state[CHANNEL_HANDLE] = videos[0]["video_id"]
             _save_state(self._state)
 
-            # Don't notify on very first check (initialization)
-            if last_seen is not None:
-                msg = (
-                    f"🎥 *Neues Video auf {CHANNEL_HANDLE}!*\n\n"
-                    f"📺 *{video['title']}*\n"
-                    f"📅 {video['published']}\n\n"
-                    f"🔗 {video['url']}"
-                )
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=msg,
-                    parse_mode="Markdown"
-                )
-                logger.info(f"New video notified: {video['title']}")
+            if not is_init:
+                for video in reversed(new_videos):  # oldest first
+                    msg = (
+                        f"🎥 *Neues Video auf {CHANNEL_HANDLE}!*\n\n"
+                        f"📺 *{video['title']}*\n"
+                        f"📅 {video['published']}\n\n"
+                        f"🔗 {video['url']}"
+                    )
+                    await self.bot.send_message(
+                        chat_id=self.chat_id, text=msg, parse_mode="Markdown"
+                    )
+                    logger.info(f"New video notified: {video['title']}")
             else:
-                logger.info(f"YouTube init: latest video = {video['title']}")
+                logger.info(f"YouTube init: {len(videos)} videos known, latest = {videos[0]['title']}")
 
     async def get_status(self) -> dict:
         """Get current status for heartbeat.
-        Only returns 'latest' if it's a video not yet shown via heartbeat.
-        Marks it as shown after returning it.
+        Returns all videos not yet shown in a heartbeat. Marks them as shown.
         """
         if not self._channel_id:
-            return {"channel": CHANNEL_HANDLE, "status": "Channel ID nicht aufgelöst", "latest": None}
+            return {"channel": CHANNEL_HANDLE, "status": "Channel ID nicht aufgelöst", "new_videos": []}
 
-        video = await fetch_latest_video(self._channel_id)
-        if not video:
+        videos = await fetch_recent_videos(self._channel_id)
+        if not videos:
             return {"channel": CHANNEL_HANDLE, "channel_id": self._channel_id,
-                    "status": "aktiv", "latest": None}
+                    "status": "aktiv", "new_videos": [], "already_seen": True}
 
-        # Only show in heartbeat if not yet shown
-        if video["video_id"] == self._heartbeat_last_shown:
-            return {"channel": CHANNEL_HANDLE, "channel_id": self._channel_id,
-                    "status": "aktiv", "latest": None, "already_seen": True}
+        new_videos = [v for v in videos if v["video_id"] not in self._heartbeat_seen_ids]
 
-        # Mark as shown
-        self._heartbeat_last_shown = video["video_id"]
+        # Mark all current videos as seen for future heartbeats
+        for v in videos:
+            self._heartbeat_seen_ids.add(v["video_id"])
+
         return {
             "channel": CHANNEL_HANDLE,
             "channel_id": self._channel_id,
             "status": "aktiv",
-            "latest": video,
-            "already_seen": False,
+            "new_videos": new_videos,
+            "already_seen": len(new_videos) == 0,
         }

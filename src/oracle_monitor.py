@@ -175,13 +175,12 @@ class OracleMonitor:
         yt_section = ""
         if youtube_monitor:
             yt = await youtube_monitor.get_status()
-            latest = yt.get("latest")
-            if latest:
-                yt_section = (
-                    f"\n\n🎥 *Neues Video – {yt['channel']}*\n"
-                    f"📺 _{latest['title']}_\n"
-                    f"📅 {latest['published']} | 🔗 {latest['url']}"
-                )
+            new_videos = yt.get("new_videos", [])
+            if new_videos:
+                lines = [f"\n\n🎥 *{len(new_videos)} neue{'s' if len(new_videos)==1 else ''} Video{'s' if len(new_videos)>1 else ''} – {yt['channel']}*"]
+                for v in new_videos:
+                    lines.append(f"� _{v['title']}_\n📅 {v['published']} | 🔗 {v['url']}")
+                yt_section = "\n\n".join(lines)
             elif yt.get("already_seen"):
                 yt_section = f"\n\n🎥 *YouTube {yt['channel']}:* Kein neues Video seit letztem Heartbeat."
             else:
