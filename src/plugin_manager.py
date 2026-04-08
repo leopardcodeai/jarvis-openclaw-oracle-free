@@ -128,8 +128,10 @@ async def run_plugin(name: str, query: str) -> str | None:
 PLUGIN_MARKER = r"\[JARVIS_PLUGIN:[^\n]*\]"  # greedy to last ] on the line
 
 
-def extract_plugin_from_response(response: str) -> dict | None:
+def extract_plugin_from_response(response: str | None) -> dict | None:
     """Extract plugin definition from LLM response."""
+    if not response:
+        return None
     marker_match = re.search(PLUGIN_MARKER, response, re.IGNORECASE)
     if not marker_match:
         return None

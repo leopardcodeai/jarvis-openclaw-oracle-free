@@ -263,8 +263,10 @@ EXEC_MARKER = re.compile(
 CODE_BLOCK = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
 
 
-def extract_script_from_response(text: str) -> dict | None:
+def extract_script_from_response(text: str | None) -> dict | None:
     """Extract script + metadata if LLM marked a block for execution."""
+    if not text:
+        return None
     marker = EXEC_MARKER.search(text)
     code_match = CODE_BLOCK.search(text)
     if not marker or not code_match:

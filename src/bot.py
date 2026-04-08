@@ -842,9 +842,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             )
             logger.info(f"Auto-tempgraph: {city} {temp_period}")
 
-    # Chart detection – send image before LLM response
+    # Chart detection – only fire if a known ticker/coin is identifiable
     if _is_chart_query(msg_lower) and not _is_temp_chart:
-        # Detect period keyword in message
         period = "1y"
         period_map = {"woche": "7d", "7 tage": "7d", "7d": "7d",
                       "monat": "1m", "30 tage": "1m", "1m": "1m",
@@ -868,24 +867,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 break
 
         if not chart_sent:
-            # 2. Company name → ticker lookup (e.g. "Apple" → AAPL)
+            # 2. Company name → ticker lookup
             ticker = None
             for name, sym in COMPANY_TICKERS.items():
                 if name in msg_lower:
                     ticker = sym
                     break
 
-            # 3. Fallback: explicit ALLCAPS ticker in message (e.g. TSLA, AAPL)
+            # 3. Explicit ALLCAPS ticker – only if chart word is NEAR the ticker
             if not ticker:
                 caps = re.findall(r'\b([A-Z]{2,5})\b', user_message)
-                # Filter out common German/English words
                 _ignore = {"DE", "AG", "KG", "SE", "AS", "AN", "IN", "UND", "MIT",
-                           "AUF", "DAS", "DIE", "DER", "EIN", "ZUM", "ZUR", "NEU"}
+                           "AUF", "DAS", "DIE", "DER", "EIN", "ZUM", "ZUR", "NEU",
+                           "AM", "IM", "ZU", "VS", "IM", "KI", "AI", "ID"}
                 for t in caps:
                     if t not in _ignore:
                         ticker = t
                         break
 
+            # Only send chart if ticker found AND yfinance likely has it
             if ticker:
                 await _send_chart(update, context, "stock", ticker, period)
                 context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {ticker} {period}]")
@@ -1049,14 +1049,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
     # Call LLM
     response = await router.chat(messages, system_prompt)
     
-    if not response.success:
+    if not response.success or not response.content:
         error_msg = "❌ Entschuldigung, ich konnte keine Antwort generieren. Bitte versuche es später erneut."
-        logger.error(f"LLM error: {response.error}")
+        logger.error(f"LLM error: {response.error or 'empty content'}")
         await update.message.reply_text(error_msg)
         return
 
     # ── Plugin auto-save ──────────────────────────────────────────────────────
-    plugin_info = extract_plugin_from_response(response.content)
+    plugin_info = extract_plugin_from_response(response.content or "")
     if plugin_info:
         logger.info(f"Plugin detected: {plugin_info['name']}")
         await update.message.reply_text(
@@ -1080,7 +1080,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
         return
 
     # ── Script auto-execution ─────────────────────────────────────────────────
-    script_info = extract_script_from_response(response.content)
+    script_info = extract_script_from_response(response.content or "")
     if script_info:
         logger.info(f"Script detected: {script_info['name']}")
 
