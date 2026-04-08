@@ -12,6 +12,170 @@ import matplotlib.ticker as mticker
 
 logger = logging.getLogger(__name__)
 
+WEATHER_PERIODS = {"24h": 1, "48h": 2, "7d": 7, "14d": 14}
+
+
+async def _geocode(city: str) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": city, "count": 1, "language": "de"}
+            )
+            results = r.json().get("results")
+            if results:
+                return {"lat": results[0]["latitude"], "lon": results[0]["longitude"],
+                        "name": results[0]["name"], "country": results[0].get("country", ""),
+                        "timezone": results[0].get("timezone", "auto")}
+    except Exception as e:
+        logger.error(f"Geocode failed: {e}")
+    return None
+
+
+async def weather_chart(city: str, period: str = "24h") -> tuple[io.BytesIO | None, dict]:
+    """Generate temperature + precipitation chart for a city via Open-Meteo."""
+    loc = await _geocode(city)
+    if not loc:
+        return None, {}
+
+    past_days = WEATHER_PERIODS.get(period.lower(), 1)
+    forecast_days = 1 if past_days <= 2 else 0
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": loc["lat"], "longitude": loc["lon"],
+                    "hourly": "temperature_2m,apparent_temperature,precipitation,relative_humidity_2m",
+                    "past_days": past_days, "forecast_days": forecast_days,
+                    "timezone": loc["timezone"], "wind_speed_unit": "kmh",
+                }
+            )
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"Weather chart fetch failed: {e}")
+        return None, {}
+
+    hourly = data.get("hourly", {})
+    times_raw = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+    feels = hourly.get("apparent_temperature", [])
+    precip = hourly.get("precipitation", [])
+    humidity = hourly.get("relative_humidity_2m", [])
+
+    if not times_raw or not temps:
+        return None, {}
+
+    # Parse timestamps and limit to requested window
+    now = datetime.now()
+    cutoff = now - timedelta(hours=past_days * 24)
+    dates, t_vals, f_vals, p_vals, h_vals = [], [], [], [], []
+    for i, ts in enumerate(times_raw):
+        try:
+            dt = datetime.fromisoformat(ts)
+        except:
+            continue
+        if dt < cutoff or dt > now + timedelta(hours=forecast_days * 24):
+            continue
+        dates.append(dt)
+        t_vals.append(temps[i] if i < len(temps) else None)
+        f_vals.append(feels[i] if i < len(feels) else None)
+        p_vals.append(precip[i] if i < len(precip) else 0)
+        h_vals.append(humidity[i] if i < len(humidity) else None)
+
+    if len(dates) < 2:
+        return None, {}
+
+    # ── Render ──
+    plt.style.use("dark_background")
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(12, 7),
+        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
+        facecolor="#0d1117"
+    )
+
+    ax1.set_facecolor("#0d1117")
+    # Temperature
+    ax1.plot(dates, t_vals, color="#00d4ff", linewidth=2.2, label="Temperatur °C", zorder=4)
+    ax1.fill_between(dates, t_vals, alpha=0.15, color="#00d4ff", zorder=2)
+    # Feels like
+    ax1.plot(dates, f_vals, color="#ffaa00", linewidth=1.2, linestyle="--",
+             alpha=0.8, label="Gefühlt °C", zorder=3)
+
+    # Zero line
+    ax1.axhline(0, color="#ff4444", linewidth=0.8, linestyle=":", alpha=0.5)
+
+    # Min/Max annotations
+    valid_t = [(d, v) for d, v in zip(dates, t_vals) if v is not None]
+    if valid_t:
+        max_dt, max_t = max(valid_t, key=lambda x: x[1])
+        min_dt, min_t = min(valid_t, key=lambda x: x[1])
+        ax1.annotate(f"▲ {max_t:.1f}°C", xy=(max_dt, max_t), xytext=(0, 10),
+                     textcoords="offset points", color="#ffdd57", fontsize=9, ha="center")
+        ax1.annotate(f"▼ {min_t:.1f}°C", xy=(min_dt, min_t), xytext=(0, -16),
+                     textcoords="offset points", color="#ff6b6b", fontsize=9, ha="center")
+
+    current_t = next((v for v in reversed(t_vals) if v is not None), None)
+    title_str = f"🌡️ {loc['name']}, {loc['country']}  –  {period.upper()}"
+    if current_t is not None:
+        title_str += f"   |   Aktuell: {current_t:.1f}°C"
+
+    ax1.set_title(title_str, fontsize=13, color="white", pad=12, fontweight="bold")
+    ax1.set_ylabel("°C", color="#8b949e", fontsize=11)
+    ax1.tick_params(colors="#8b949e", labelbottom=False)
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}°"))
+    ax1.legend(fontsize=9, loc="upper left", facecolor="#161b22", edgecolor="#30363d")
+    ax1.grid(color="#21262d", linewidth=0.5)
+    ax1.spines[:].set_edgecolor("#21262d")
+
+    # ── Precipitation bars ──
+    ax2.set_facecolor("#0d1117")
+    ax2.bar(dates, p_vals, color="#4488ff88", width=0.03 if period == "24h" else 0.1,
+            label="Niederschlag mm")
+    ax2.set_ylabel("mm", color="#8b949e", fontsize=8)
+    ax2.tick_params(colors="#8b949e", labelsize=8)
+    ax2.grid(color="#21262d", linewidth=0.3)
+    ax2.spines[:].set_edgecolor("#21262d")
+
+    # X-axis
+    fmt = "%H:%M" if past_days <= 2 else "%d.%m %H:%M"
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter(fmt))
+    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha="right", color="#8b949e", fontsize=8)
+
+    fig.patch.set_facecolor("#0d1117")
+    plt.tight_layout(pad=1.5)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor="#0d1117", edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+
+    meta = {
+        "city": f"{loc['name']}, {loc['country']}",
+        "period": period,
+        "current_temp": current_t,
+        "max_temp": max_t if valid_t else None,
+        "min_temp": min_t if valid_t else None,
+        "total_precip": round(sum(p for p in p_vals if p), 2),
+    }
+    return buf, meta
+
+
+def format_weather_chart_summary(meta: dict) -> str:
+    city = meta.get("city", "")
+    curr = f"{meta['current_temp']:.1f}°C" if meta.get("current_temp") is not None else "?"
+    hi = f"{meta['max_temp']:.1f}°C" if meta.get("max_temp") is not None else "?"
+    lo = f"{meta['min_temp']:.1f}°C" if meta.get("min_temp") is not None else "?"
+    rain = meta.get("total_precip", 0)
+    return (
+        f"🌡️ *{city}* – {meta['period'].upper()}\n"
+        f"🌡️ Aktuell: {curr}  |  ▲ {hi}  |  ▼ {lo}\n"
+        f"🌧️ Niederschlag gesamt: {rain} mm"
+    )
+
 PERIOD_DAYS = {
     "1w": 7, "7d": 7,
     "1m": 30, "30d": 30,

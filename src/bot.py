@@ -19,7 +19,9 @@ from .finance import get_crypto_price, get_stock_price, format_crypto, format_st
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
-from .charts import crypto_chart, stock_chart, format_chart_summary, COINGECKO_IDS as CHART_COIN_IDS, PERIOD_DAYS
+from .charts import (crypto_chart, stock_chart, format_chart_summary,
+                     weather_chart, format_weather_chart_summary,
+                     COINGECKO_IDS as CHART_COIN_IDS, PERIOD_DAYS, WEATHER_PERIODS)
 from .github_tool import (
     search_repos as gh_search_repos, search_code as gh_search_code,
     get_repo_info as gh_repo_info, read_file as gh_read_file,
@@ -323,6 +325,11 @@ CHART_TRIGGERS = ["verlauf", "chart", "graph", "entwicklung", "historisch", "his
                   "letztes jahr", "letzten monat", "letzten wochen", "letzten 30", "letzten 7",
                   "wie war", "wie lief", "performance", "rendite", "kurs verlauf"]
 
+TEMP_CHART_TRIGGERS = ["temperatur graph", "temperatur chart", "temp graph", "temp chart",
+                       "temperaturverlauf", "temperature graph", "temperature chart",
+                       "wärme verlauf", "grad verlauf", "wie war die temperatur",
+                       "letzten tag temp", "letzte 24", "letzte 48", "letzten 7 tage temp"]
+
 
 async def _send_chart(update: Update, context, kind: str, symbol: str, period: str):
     """Generate and send a chart image with text summary."""
@@ -374,6 +381,43 @@ async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     kind = "crypto" if symbol in CHART_COIN_IDS else "stock"
     await _send_chart(update, context, kind, symbol, period)
+
+
+async def tempgraph_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /tempgraph <Stadt> [24h|48h|7d|14d] – Temperaturverlauf als Graph.
+    Beispiele: /tempgraph München   /tempgraph Berlin 7d
+    """
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Verwendung: `/tempgraph <Stadt> [zeitraum]`\n\n"
+            "Beispiele:\n"
+            "`/tempgraph München` – letzte 24 Stunden\n"
+            "`/tempgraph Berlin 48h` – letzte 48 Stunden\n"
+            "`/tempgraph Hamburg 7d` – letzte 7 Tage\n\n"
+            "Zeiträume: `24h` `48h` `7d` `14d`",
+            parse_mode="Markdown"
+        )
+        return
+
+    city = context.args[0]
+    period = context.args[1].lower() if len(context.args) > 1 else "24h"
+    if period not in WEATHER_PERIODS:
+        period = "24h"
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
+    buf, meta = await weather_chart(city, period)
+    if buf is None:
+        await update.message.reply_text(f"❌ Keine Wetterdaten für `{city}` gefunden.", parse_mode="Markdown")
+        return
+    caption = format_weather_chart_summary(meta)
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=buf,
+        caption=caption,
+        parse_mode="Markdown"
+    )
 
 
 def _gh_token() -> str | None:
@@ -589,6 +633,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context_parts = []
     msg_lower = user_message.lower()
 
+    # Temperature chart detection
+    if any(t in msg_lower for t in TEMP_CHART_TRIGGERS):
+        import re
+        temp_period = "24h"
+        if any(x in msg_lower for x in ["48h", "48 stunden", "2 tage"]):
+            temp_period = "48h"
+        elif any(x in msg_lower for x in ["7d", "7 tage", "woche", "letzte woche"]):
+            temp_period = "7d"
+        elif any(x in msg_lower for x in ["14d", "14 tage", "zwei wochen"]):
+            temp_period = "14d"
+        # Extract city
+        city_match = re.search(r'für ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
+        city_match2 = re.search(r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
+        city = (city_match or city_match2)
+        city = city.group(1) if city else "München"
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
+        t_buf, t_meta = await weather_chart(city, temp_period)
+        if t_buf:
+            caption = format_weather_chart_summary(t_meta)
+            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=t_buf,
+                                         caption=caption, parse_mode="Markdown")
+            context_parts.append(f"[Temperatur-Chart gesendet: {city} {temp_period}, "
+                                 f"aktuell {t_meta.get('current_temp', '?')}°C, "
+                                 f"max {t_meta.get('max_temp', '?')}°C, "
+                                 f"min {t_meta.get('min_temp', '?')}°C]")
+            logger.info(f"Auto-tempgraph: {city} {temp_period}")
+
     # Chart detection – send image before LLM response
     if any(t in msg_lower for t in CHART_TRIGGERS):
         import re
@@ -762,6 +833,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
     application.add_handler(CommandHandler("chart", chart_command))
+    application.add_handler(CommandHandler("tempgraph", tempgraph_command))
     application.add_handler(CommandHandler("ghsearch", ghsearch_command))
     application.add_handler(CommandHandler("ghrepo", ghrepo_command))
     application.add_handler(CommandHandler("ghfile", ghfile_command))
