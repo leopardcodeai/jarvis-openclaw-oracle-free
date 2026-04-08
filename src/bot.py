@@ -335,6 +335,14 @@ TEMP_CHART_TRIGGERS = ["temperatur graph", "temperatur chart", "temp graph", "te
                        "wärme verlauf", "grad verlauf", "wie war die temperatur",
                        "letzten tag temp", "letzte 24", "letzte 48", "letzten 7 tage temp"]
 
+# Additional keywords for compound detection: "temperatur" + one of these = chart
+_TEMP_COMPOUND_KEYWORDS = [
+    "verlauf", "graph", "chart", "diagramm", "bild", "visuali",
+    "stunden", "tage", "woche", "monat", "letzte", "letzten",
+    "historisch", "history", "entwicklung", "zeig", "wie war",
+    "wie lief", "24h", "48h", "7d", "14d",
+]
+
 
 async def _send_chart(update: Update, context, kind: str, symbol: str, period: str):
     """Generate and send a chart image with text summary."""
@@ -679,36 +687,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context_parts = []
     msg_lower = user_message.lower()
 
-    # Temperature chart detection
-    if any(t in msg_lower for t in TEMP_CHART_TRIGGERS):
-        import re
+    # Temperature chart detection – explicit triggers OR compound ("temperatur" + visual/time keyword)
+    import re
+    _is_temp_chart = (
+        any(t in msg_lower for t in TEMP_CHART_TRIGGERS)
+        or ("temperatur" in msg_lower and any(k in msg_lower for k in _TEMP_COMPOUND_KEYWORDS))
+        or ("wetter" in msg_lower and any(k in msg_lower for k in ["graph", "chart", "diagramm", "bild", "verlauf", "visuali"]))
+    )
+    if _is_temp_chart:
         temp_period = "24h"
-        if any(x in msg_lower for x in ["48h", "48 stunden", "2 tage"]):
+        if any(x in msg_lower for x in ["48h", "48 stunden", "letzten 48", "letzte 48", "2 tage"]):
             temp_period = "48h"
-        elif any(x in msg_lower for x in ["7d", "7 tage", "woche", "letzte woche"]):
+        elif any(x in msg_lower for x in ["7d", "7 tage", "woche", "letzte woche", "letzten 7"]):
             temp_period = "7d"
-        elif any(x in msg_lower for x in ["14d", "14 tage", "zwei wochen"]):
+        elif any(x in msg_lower for x in ["14d", "14 tage", "zwei wochen", "letzten 14"]):
             temp_period = "14d"
-        # Extract city
-        city_match = re.search(r'für ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
-        city_match2 = re.search(r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
-        city = (city_match or city_match2)
-        city = city.group(1) if city else "München"
+        # Extract city: "für X" or "in X" or "von X"
+        city = "München"
+        for pattern in [r'für ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)',
+                        r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)',
+                        r'von ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)']:
+            m = re.search(pattern, user_message)
+            if m:
+                city = m.group(1)
+                break
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
         t_buf, t_meta = await weather_chart(city, temp_period)
         if t_buf:
             caption = format_weather_chart_summary(t_meta)
             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=t_buf,
                                          caption=caption, parse_mode="Markdown")
-            context_parts.append(f"[Temperatur-Chart gesendet: {city} {temp_period}, "
-                                 f"aktuell {t_meta.get('current_temp', '?')}°C, "
-                                 f"max {t_meta.get('max_temp', '?')}°C, "
-                                 f"min {t_meta.get('min_temp', '?')}°C]")
+            context_parts.append(
+                f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm ausgeben!\n"
+                f"Temperatur-Chart: {city} {temp_period} | "
+                f"aktuell {t_meta.get('current_temp', '?')}°C | "
+                f"max {t_meta.get('max_temp', '?')}°C | "
+                f"min {t_meta.get('min_temp', '?')}°C | "
+                f"Niederschlag: {t_meta.get('total_precip', 0)} mm]"
+            )
             logger.info(f"Auto-tempgraph: {city} {temp_period}")
 
     # Chart detection – send image before LLM response
-    if any(t in msg_lower for t in CHART_TRIGGERS):
-        import re
+    if any(t in msg_lower for t in CHART_TRIGGERS) and not _is_temp_chart:
         # Detect period keyword in message
         period = "1y"
         period_map = {"woche": "7d", "7 tage": "7d", "7d": "7d",
@@ -725,19 +745,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for coin_key in CHART_COIN_IDS:
             if coin_key in msg_lower and len(coin_key) > 2:
                 await _send_chart(update, context, "crypto", coin_key, period)
-                context_parts.append(f"[Chart gesendet: {coin_key.upper()} {period}]")
+                context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {coin_key.upper()} {period}]")
                 break
         else:
             # Detect stock ticker (2-5 uppercase letters)
             tickers = re.findall(r'\b([A-Z]{2,5})\b', user_message)
             for ticker in tickers[:1]:
                 await _send_chart(update, context, "stock", ticker, period)
-                context_parts.append(f"[Chart gesendet: {ticker} {period}]")
+                context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {ticker} {period}]")
                 break
 
     # Weather detection
-    if any(t in msg_lower for t in WEATHER_TRIGGERS):
-        import re
+    if any(t in msg_lower for t in WEATHER_TRIGGERS) and not _is_temp_chart:
         city_match = re.search(r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
         city = city_match.group(1) if city_match else "München"
         weather_data = await get_weather(city)
