@@ -336,7 +336,18 @@ CHART_TRIGGERS = ["verlauf", "chart", "graph", "entwicklung", "historisch", "his
                   "letztes jahr", "letzten monat", "letzten wochen", "letzten 30", "letzten 7",
                   "wie war", "wie lief", "performance", "rendite", "kurs verlauf",
                   "als graph", "als chart", "als bild", "als diagramm",
-                  "aktie", "kurs", "aktienkurs"]
+                  "aktienkurs"]
+# Word-boundary sensitive triggers (avoid false positives like "aktuelle" → "aktie")
+_CHART_WORD_TRIGGERS = ["aktie", "kurs", "börse", "börsenkurs"]
+
+
+def _is_chart_query(msg_lower: str) -> bool:
+    """Check chart triggers with word-boundary awareness."""
+    if any(t in msg_lower for t in CHART_TRIGGERS):
+        return True
+    # Word-boundary check for short ambiguous words
+    import re as _re
+    return any(_re.search(rf'\b{_re.escape(t)}\b', msg_lower) for t in _CHART_WORD_TRIGGERS)
 
 # Company name → ticker mapping for auto chart detection
 COMPANY_TICKERS = {
@@ -832,7 +843,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             logger.info(f"Auto-tempgraph: {city} {temp_period}")
 
     # Chart detection – send image before LLM response
-    if any(t in msg_lower for t in CHART_TRIGGERS) and not _is_temp_chart:
+    if _is_chart_query(msg_lower) and not _is_temp_chart:
         # Detect period keyword in message
         period = "1y"
         period_map = {"woche": "7d", "7 tage": "7d", "7d": "7d",
@@ -1257,12 +1268,22 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors."""
-    logger.error(f"Error: {context.error}")
-    
+    import traceback
+    tb = "".join(traceback.format_exception(type(context.error), context.error, context.error.__traceback__))
+    logger.error(f"Unhandled error: {context.error}\n{tb}")
+
     if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "❌ Ein Fehler ist aufgetreten. Bitte versuche es erneut."
-        )
+        err_type = type(context.error).__name__
+        err_msg = str(context.error)[:200]
+        try:
+            await update.effective_message.reply_text(
+                f"❌ Fehler: `{err_type}: {err_msg}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await update.effective_message.reply_text(
+                f"❌ Fehler: {err_type}: {err_msg}"
+            )
 
 
 async def post_init(application: Application) -> None:
