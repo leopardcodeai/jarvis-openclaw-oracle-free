@@ -1,3 +1,4 @@
+import base64
 import httpx
 import logging
 from typing import AsyncGenerator
@@ -190,6 +191,88 @@ class LLMRouter:
                 error=str(e)
             )
     
+    async def chat_with_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/jpeg",
+        system_prompt: str | None = None,
+    ) -> LLMResponse:
+        """Send a vision request with an image. Uses Gemini first, then OpenRouter."""
+        b64 = base64.b64encode(image_bytes).decode()
+
+        # Try Gemini (best vision support)
+        if settings.gemini_api_key:
+            response = await self._call_gemini_vision(prompt, b64, mime_type, system_prompt)
+            if response.success:
+                return response
+            logger.warning(f"Gemini vision failed: {response.error}. Trying OpenRouter.")
+
+        # Fallback: OpenRouter with a vision-capable model
+        return await self._call_openrouter_vision(prompt, b64, mime_type, system_prompt)
+
+    async def _call_gemini_vision(
+        self, prompt: str, b64: str, mime_type: str, system_prompt: str | None
+    ) -> LLMResponse:
+        try:
+            url = f"{self.gemini_url}/{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": mime_type, "data": b64}},
+                    ]
+                }]
+            }
+            if system_prompt:
+                payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                return LLMResponse("", "gemini", settings.gemini_model, False,
+                                   f"HTTP {resp.status_code}: {resp.text[:200]}")
+            content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return LLMResponse(content, "gemini", settings.gemini_model, True)
+        except Exception as e:
+            return LLMResponse("", "gemini", settings.gemini_model, False, str(e))
+
+    async def _call_openrouter_vision(
+        self, prompt: str, b64: str, mime_type: str, system_prompt: str | None
+    ) -> LLMResponse:
+        """OpenRouter vision via a free vision-capable model."""
+        vision_model = "google/gemini-2.0-flash-exp:free"
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+            ]
+        })
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    self.openrouter_url,
+                    headers={
+                        "Authorization": f"Bearer {settings.openrouter_api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/openclaw",
+                        "X-Title": "OpenClaw Assistant",
+                    },
+                    json={"model": vision_model, "messages": messages, "max_tokens": 1024},
+                )
+            if resp.status_code != 200:
+                return LLMResponse("", "openrouter", vision_model, False,
+                                   f"HTTP {resp.status_code}: {resp.text[:200]}")
+            content = resp.json()["choices"][0]["message"]["content"]
+            return LLMResponse(content, "openrouter", vision_model, True)
+        except Exception as e:
+            return LLMResponse("", "openrouter", vision_model, False, str(e))
+
     async def health_check(self) -> dict:
         """Check health of all LLM providers."""
         results = {

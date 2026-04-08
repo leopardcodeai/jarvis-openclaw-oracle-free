@@ -1111,6 +1111,111 @@ async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(msg, parse_mode=None)
 
 
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle photo messages: describe with vision LLM."""
+    if not is_authorized(update.effective_user.id):
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    caption = update.message.caption or "Was siehst du auf diesem Bild? Beschreibe es detailliert auf Deutsch."
+
+    try:
+        # Get highest resolution photo
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        img_bytes = await file.download_as_bytearray()
+
+        system_prompt = conversations.get_system_prompt(update.effective_user.id)
+        response = await router.chat_with_vision(
+            prompt=caption,
+            image_bytes=bytes(img_bytes),
+            mime_type="image/jpeg",
+            system_prompt=system_prompt,
+        )
+
+        if response.success:
+            reply = response.content
+            conversations.add_message(update.effective_user.id, "user", f"[Bild gesendet] {caption}")
+            conversations.add_message(update.effective_user.id, "assistant", reply)
+            if len(reply) > 4000:
+                reply = reply[:4000] + "\n_(gekürzt)_"
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ Vision-Fehler: `{response.error}`", parse_mode="Markdown")
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Photo handler error: {e}\n{traceback.format_exc()}")
+        await update.message.reply_text(f"❌ Fehler: `{type(e).__name__}: {str(e)[:150]}`", parse_mode="Markdown")
+
+
+async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle video messages: extract first frame via ffmpeg, describe with vision LLM."""
+    if not is_authorized(update.effective_user.id):
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    caption = update.message.caption or "Was siehst du in diesem Video? Beschreibe Inhalt und Kontext auf Deutsch."
+
+    try:
+        import tempfile, subprocess as sp
+
+        # Download video (limit to 20MB)
+        video = update.message.video or update.message.document
+        if not video:
+            await update.message.reply_text("❌ Kein Video erkannt.")
+            return
+
+        if getattr(video, "file_size", 0) > 20 * 1024 * 1024:
+            await update.message.reply_text("⚠️ Video zu groß (max 20MB). Sende ein kürzeres Clip.")
+            return
+
+        status = await update.message.reply_text("🎬 Analysiere Video...", parse_mode=None)
+
+        file = await context.bot.get_file(video.file_id)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+            vid_path = vf.name
+        await file.download_to_drive(vid_path)
+
+        # Extract first frame with ffmpeg
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as ff:
+            frame_path = ff.name
+        sp.run(
+            ["ffmpeg", "-y", "-i", vid_path, "-vframes", "1", "-q:v", "2", frame_path],
+            capture_output=True, timeout=15
+        )
+        os.unlink(vid_path)
+
+        with open(frame_path, "rb") as f:
+            img_bytes = f.read()
+        os.unlink(frame_path)
+
+        await status.delete()
+
+        system_prompt = conversations.get_system_prompt(update.effective_user.id)
+        response = await router.chat_with_vision(
+            prompt=f"[Erster Frame eines Videos] {caption}",
+            image_bytes=img_bytes,
+            mime_type="image/jpeg",
+            system_prompt=system_prompt,
+        )
+
+        if response.success:
+            reply = response.content
+            conversations.add_message(update.effective_user.id, "user", f"[Video gesendet] {caption}")
+            conversations.add_message(update.effective_user.id, "assistant", reply)
+            if len(reply) > 4000:
+                reply = reply[:4000] + "\n_(gekürzt)_"
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ Vision-Fehler: `{response.error}`", parse_mode="Markdown")
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Video handler error: {e}\n{traceback.format_exc()}")
+        await update.message.reply_text(f"❌ Fehler: `{type(e).__name__}: {str(e)[:150]}`", parse_mode="Markdown")
+
+
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle voice messages: transcribe with Whisper then process as text."""
     if not is_authorized(update.effective_user.id):
@@ -1143,8 +1248,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await handle_message(update, context)
 
     except Exception as e:
-        logger.error(f"Voice handler error: {e}")
-        await update.message.reply_text("❌ Fehler bei der Spracherkennung.")
+        import traceback
+        logger.error(f"Voice handler error: {e}\n{traceback.format_exc()}")
+        await update.message.reply_text(
+            f"❌ Fehler bei der Spracherkennung:\n`{type(e).__name__}: {str(e)[:200]}`",
+            parse_mode="Markdown"
+        )
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1215,6 +1324,8 @@ def create_application() -> Application:
     # Message handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    application.add_handler(MessageHandler(filters.VIDEO, video_handler))
 
     # Error handler
     application.add_error_handler(error_handler)
