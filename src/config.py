@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     
     # Ollama (Fallback LLM)
     ollama_host: str = "http://localhost:11434"
-    ollama_model: str = "gemma2:2b"
+    ollama_model: str = "gemma4:e2b"
     
     # Bot Settings
     allowed_user_ids: Optional[str] = None

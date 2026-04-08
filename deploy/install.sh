@@ -48,9 +48,9 @@ sudo systemctl start ollama
 echo "⏳ Waiting for Ollama to start..."
 sleep 5
 
-# Pull a small model for fallback (Gemma 2 2B is good for ARM)
-echo "📥 Pulling Gemma 2 2B model (this may take a while)..."
-ollama pull gemma2:2b
+# Pull Gemma 4 e2b model
+echo "📥 Pulling Gemma 4 e2b model (this may take a while)..."
+ollama pull gemma4:e2b
 
 # Create app directory
 APP_DIR="$HOME/openclaw"

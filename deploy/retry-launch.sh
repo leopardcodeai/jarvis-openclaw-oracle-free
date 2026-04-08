@@ -37,7 +37,7 @@ while true; do
             echo "✅ SUCCESS! Instance wird gestartet in $AD"
             
             # Get instance ID
-            INSTANCE_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])")
+            INSTANCE_ID=$(echo "$RESULT" | /opt/homebrew/bin/python3.12 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "$RESULT" | grep '"id"' | head -1 | sed 's/.*"id": "\(.*\)".*/\1/')
             echo "Instance ID: $INSTANCE_ID"
             
             echo "⏳ Warte auf Public IP..."
