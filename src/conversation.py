@@ -1,0 +1,67 @@
+from dataclasses import dataclass, field
+from typing import Dict, List
+from datetime import datetime
+
+from .config import settings
+
+
+@dataclass
+class Message:
+    role: str  # "user" or "assistant"
+    content: str
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+class ConversationManager:
+    """Manages conversation history per user."""
+    
+    def __init__(self):
+        self._histories: Dict[int, List[Message]] = {}
+        self._system_prompts: Dict[int, str] = {}
+        self._default_system_prompt = """Du bist ein hilfreicher AI-Assistent namens OpenClaw. 
+Du antwortest freundlich, präzise und auf Deutsch, es sei denn der Nutzer schreibt in einer anderen Sprache.
+Du kannst bei verschiedenen Aufgaben helfen: Fragen beantworten, Texte schreiben, Ideen entwickeln und mehr."""
+    
+    def add_message(self, user_id: int, role: str, content: str) -> None:
+        """Add a message to user's history."""
+        if user_id not in self._histories:
+            self._histories[user_id] = []
+        
+        self._histories[user_id].append(Message(role=role, content=content))
+        
+        # Trim history if too long
+        max_len = settings.max_history_length
+        if len(self._histories[user_id]) > max_len:
+            self._histories[user_id] = self._histories[user_id][-max_len:]
+    
+    def get_messages(self, user_id: int) -> List[dict]:
+        """Get conversation history as list of dicts for LLM."""
+        if user_id not in self._histories:
+            return []
+        
+        return [
+            {"role": msg.role, "content": msg.content}
+            for msg in self._histories[user_id]
+        ]
+    
+    def get_system_prompt(self, user_id: int) -> str:
+        """Get system prompt for user."""
+        return self._system_prompts.get(user_id, self._default_system_prompt)
+    
+    def set_system_prompt(self, user_id: int, prompt: str) -> None:
+        """Set custom system prompt for user."""
+        self._system_prompts[user_id] = prompt
+    
+    def clear_history(self, user_id: int) -> None:
+        """Clear conversation history for user."""
+        if user_id in self._histories:
+            self._histories[user_id] = []
+    
+    def reset_system_prompt(self, user_id: int) -> None:
+        """Reset to default system prompt."""
+        if user_id in self._system_prompts:
+            del self._system_prompts[user_id]
+
+
+# Global conversation manager
+conversations = ConversationManager()
