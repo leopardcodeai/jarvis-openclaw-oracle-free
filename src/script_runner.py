@@ -72,10 +72,40 @@ _init_db()
 
 # ── Safety ────────────────────────────────────────────────────────────────────
 
+def _fix_llm_code(code: str) -> str:
+    """Fix common LLM code-generation artifacts (merged lines, missing spaces)."""
+    import re as _re
+
+    # Step 1: Split any line that has 'import' appearing mid-line
+    # e.g. "import numpy as npimport io, base64" → two lines
+    # e.g. "import io, base64x = foo" → two lines
+    split_lines = []
+    for line in code.splitlines():
+        # Find all 'import' tokens after position 0 and split there
+        parts = _re.split(r'(?<=\w)(import\s+)', line)
+        if len(parts) > 1:
+            # Reconstruct: first part stays, each subsequent starts with 'import '
+            reconstructed = [parts[0]]
+            i = 1
+            while i < len(parts):
+                reconstructed.append(parts[i] + (parts[i+1] if i+1 < len(parts) else ""))
+                i += 2
+            split_lines.extend(reconstructed)
+        else:
+            split_lines.append(line)
+
+    # Step 2: Fix missing space after def/class – only at start of line (with optional indent)
+    result = '\n'.join(split_lines)
+    result = _re.sub(r'^(\s*)def([A-Za-z_])', r'\1def \2', result, flags=_re.MULTILINE)
+    result = _re.sub(r'^(\s*)class([A-Za-z_])', r'\1class \2', result, flags=_re.MULTILINE)
+    return result
+
+
 def _syntax_check(code: str) -> tuple[bool, str]:
-    """Validate Python syntax before execution."""
+    """Validate Python syntax before execution (auto-fix common LLM artifacts first)."""
+    fixed = _fix_llm_code(code)
     try:
-        compile(code, "<jarvis_script>", "exec")
+        compile(fixed, "<jarvis_script>", "exec")
         return True, ""
     except SyntaxError as e:
         return False, f"SyntaxError Zeile {e.lineno}: {e.msg}\n  → `{(e.text or '').strip()}`"
@@ -91,6 +121,7 @@ def _safety_check(code: str) -> tuple[bool, str]:
 # ── Execution ─────────────────────────────────────────────────────────────────
 
 def _run_script_sync(code: str, args: list[str] | None = None) -> dict:
+    code = _fix_llm_code(code)  # normalize before execution
     # Syntax check first
     syntax_ok, syntax_err = _syntax_check(code)
     if not syntax_ok:
