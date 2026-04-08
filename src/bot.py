@@ -200,9 +200,8 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     results = await search(query)
     msg = format_results_for_telegram(query, results)
-    if len(msg) > 4000:
-        msg = msg[:4000] + "\n\n_(Ergebnisse gekürzt)_"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    for _chunk in _split_message(msg):
+        await update.message.reply_text(_chunk, parse_mode="Markdown")
 
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -311,9 +310,8 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     data = await wiki_search(query)
     msg = format_wiki(data)
-    if len(msg) > 4000:
-        msg = msg[:4000] + "\n\n_(Artikel gekürzt)_"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    for _chunk in _split_message(msg):
+        await update.message.reply_text(_chunk, parse_mode="Markdown")
 
 
 async def sys_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -607,14 +605,13 @@ async def ghsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("Verwendung: `/ghsearch <Suchbegriff>`", parse_mode="Markdown")
+        await safe_reply(update.message, "Verwendung: `/ghsearch <Suchbegriff>`", parse_mode="Markdown")
         return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     results = await gh_search_repos(token, query)
     msg = format_search_repos(results)
-    if len(msg) > 4000:
-        msg = msg[:4000] + "\n_(gekürzt)_"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    for _chunk in _split_message(msg):
+        await update.message.reply_text(_chunk, parse_mode="Markdown")
 
 
 async def ghrepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -633,9 +630,8 @@ async def ghrepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data = await gh_repo_info(token, repo)
     if data:
         msg = format_repo_info(data)
-        if len(msg) > 4000:
-            msg = msg[:4000] + "\n_(gekürzt)_"
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        for _chunk in _split_message(msg):
+            await update.message.reply_text(_chunk, parse_mode="Markdown")
     else:
         await update.message.reply_text(f"❌ Repo `{repo}` nicht gefunden.", parse_mode="Markdown")
 
@@ -664,10 +660,11 @@ async def ghfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     content = data["content"]
     header = f"📄 `{repo}/{path}` (branch: `{ref}`)\n\n"
-    body = f"```\n{content[:3500]}\n```"
-    if len(content) > 3500:
-        body += "\n_(Datei gekürzt)_"
-    await update.message.reply_text(header + body, parse_mode="Markdown")
+    # Send in chunks of 3500 chars of content to stay inside code blocks
+    chunks = [content[i:i+3500] for i in range(0, len(content), 3500)]
+    for idx, ch in enumerate(chunks):
+        prefix = header if idx == 0 else ""
+        await update.message.reply_text(f"{prefix}```\n{ch}\n```", parse_mode="Markdown")
 
 
 async def ghprs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -777,16 +774,42 @@ async def ghpush_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"❌ Fehler: {result['error']}")
 
 
+_MAX_TG = 4000  # Telegram message limit (4096 hard limit, stay safe)
+
+
+def _split_message(text: str, limit: int = _MAX_TG) -> list[str]:
+    """Split text into chunks ≤ limit chars, breaking at paragraph/line boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        # Try to split at double newline (paragraph)
+        cut = text.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            # Fall back to single newline
+            cut = text.rfind("\n", 0, limit)
+        if cut < limit // 4:
+            # Hard cut
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    return [c for c in chunks if c]
+
+
 async def safe_reply(message, text: str, **kwargs) -> None:
-    """Send reply with Markdown, fall back to plain text on parse error."""
-    try:
-        await message.reply_text(text, parse_mode="Markdown", **kwargs)
-    except Exception:
+    """Send reply, splitting across multiple messages if needed, with Markdown fallback."""
+    for chunk in _split_message(text):
         try:
-            await message.reply_text(text, parse_mode=None, **kwargs)
-        except Exception as e:
-            logger.error(f"safe_reply failed: {e}")
-            await message.reply_text("❌ Antwort konnte nicht gesendet werden.", parse_mode=None)
+            await message.reply_text(chunk, parse_mode="Markdown", **kwargs)
+        except Exception:
+            try:
+                await message.reply_text(chunk, parse_mode=None, **kwargs)
+            except Exception as e:
+                logger.error(f"safe_reply failed: {e}")
+                await message.reply_text("❌ Antwort konnte nicht gesendet werden.", parse_mode=None)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, override_text: str | None = None) -> None:
@@ -1221,9 +1244,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
 
         # Show execution result
         exec_msg = format_run_result(run_result, script_info["name"])
-        if len(exec_msg) > 4000:
-            exec_msg = exec_msg[:4000] + "\n```\n_(gekürzt)_"
-        await update.message.reply_text(exec_msg, parse_mode="Markdown")
+        for _chunk in _split_message(exec_msg):
+            await update.message.reply_text(_chunk, parse_mode="Markdown")
 
         # Second LLM call: interpret the output for the user
         if run_result["success"] and run_result.get("stdout"):
@@ -1238,8 +1260,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             interp = await router.chat(interp_messages, system_prompt)
             if interp.success and interp.content:
                 reply_text = interp.content
-                if len(reply_text) > 4000:
-                    reply_text = reply_text[:4000] + "\n_(gekürzt)_"
                 await safe_reply(update.message, reply_text)
                 conversations.add_message(user_id, "assistant", response.content + "\n\n" + interp.content)
                 return
@@ -1247,8 +1267,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
     # ── Normal response ───────────────────────────────────────────────────────
     conversations.add_message(user_id, "assistant", response.content)
     reply_text = sanitize_output(response.content, user_id)  # redact secrets
-    if len(reply_text) > 4000:
-        reply_text = reply_text[:4000] + "\n\n_(Nachricht gekürzt)_"
     await safe_reply(update.message, reply_text)
 
 
@@ -1297,9 +1315,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply = response.content
             conversations.add_message(update.effective_user.id, "user", f"[Bild gesendet] {caption}")
             conversations.add_message(update.effective_user.id, "assistant", reply)
-            if len(reply) > 4000:
-                reply = reply[:4000] + "\n_(gekürzt)_"
-            await update.message.reply_text(reply, parse_mode="Markdown")
+            for _chunk in _split_message(reply):
+                await update.message.reply_text(_chunk, parse_mode="Markdown")
         else:
             await update.message.reply_text(f"❌ Vision-Fehler: `{response.error}`", parse_mode="Markdown")
 
@@ -1364,9 +1381,8 @@ async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply = response.content
             conversations.add_message(update.effective_user.id, "user", f"[Video gesendet] {caption}")
             conversations.add_message(update.effective_user.id, "assistant", reply)
-            if len(reply) > 4000:
-                reply = reply[:4000] + "\n_(gekürzt)_"
-            await update.message.reply_text(reply, parse_mode="Markdown")
+            for _chunk in _split_message(reply):
+                await update.message.reply_text(_chunk, parse_mode="Markdown")
         else:
             await update.message.reply_text(f"❌ Vision-Fehler: `{response.error}`", parse_mode="Markdown")
 

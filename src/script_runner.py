@@ -76,29 +76,78 @@ def _fix_llm_code(code: str) -> str:
     """Fix common LLM code-generation artifacts (merged lines, missing spaces)."""
     import re as _re
 
-    # Step 1: Split any line that has 'import' appearing mid-line
-    # e.g. "import numpy as npimport io, base64" → two lines
-    # e.g. "import io, base64x = foo" → two lines
     split_lines = []
     for line in code.splitlines():
-        # Find all 'import' tokens after position 0 and split there
-        parts = _re.split(r'(?<=\w)(import\s+)', line)
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        prefix = ' ' * indent
+
+        # ── Fix 1: mid-line 'import' (e.g. "import numpy as npimport io, base64")
+        parts = _re.split(r'(?<=\w)(import\s+)', stripped)
         if len(parts) > 1:
-            # Reconstruct: first part stays, each subsequent starts with 'import '
             reconstructed = [parts[0]]
             i = 1
             while i < len(parts):
                 reconstructed.append(parts[i] + (parts[i+1] if i+1 < len(parts) else ""))
                 i += 2
-            split_lines.extend(reconstructed)
-        else:
-            split_lines.append(line)
+            split_lines.extend(prefix + p.strip() for p in reconstructed if p.strip())
+            continue
 
-    # Step 2: Fix missing space after def/class – only at start of line (with optional indent)
+        # ── Fix 2: merged statements separated by 4+ spaces
+        # e.g. "self.x = a        self.y = b" or "a = 1    b = 2"
+        # Only split if both halves look like statements (contain = or start with keyword)
+        _STMT_START = _re.compile(r'^(self\.|[a-zA-Z_]\w*\s*[\[=\(]|return |if |for |while |raise )')
+        if _re.search(r'\S {4,}\S', stripped):
+            chunks = _re.split(r' {4,}', stripped)
+            if len(chunks) > 1 and all(_STMT_START.match(c.strip()) for c in chunks if c.strip()):
+                split_lines.extend(prefix + c.strip() for c in chunks if c.strip())
+                continue
+
+        split_lines.append(line)
+
+    # ── Fix 3: missing space after def/class/from at line start
     result = '\n'.join(split_lines)
     result = _re.sub(r'^(\s*)def([A-Za-z_])', r'\1def \2', result, flags=_re.MULTILINE)
     result = _re.sub(r'^(\s*)class([A-Za-z_])', r'\1class \2', result, flags=_re.MULTILINE)
-    return result
+    result = _re.sub(r'^(\s*)from([A-Za-z_])', r'\1from \2', result, flags=_re.MULTILINE)
+
+    # ── Fix 4: keyword/definition embedded mid-word
+    # e.g. "endwhile", "OrderedDictclass LRU", "codecsplaintext"
+    _KW_PAT = (r'while|for|if|elif|else|return|yield|raise|break|continue|pass'
+               r'|with|try|except|finally|class|def|async|import')
+    lines2 = []
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        prefix = ' ' * indent
+        parts = _re.split(r'(?<=\w)(' + _KW_PAT + r'\b)', stripped)
+        if len(parts) > 1:
+            reconstructed, i = [parts[0]], 1
+            while i < len(parts):
+                reconstructed.append(parts[i] + (parts[i+1] if i+1 < len(parts) else ""))
+                i += 2
+            lines2.extend(prefix + p.strip() for p in reconstructed if p.strip())
+        else:
+            lines2.append(line)
+    result = '\n'.join(lines2)
+
+    # ── Fix 2b: merged statements with 4+ spaces where first is break/continue/pass/return
+    _STMT_START2 = _re.compile(
+        r'^(self\.|[a-zA-Z_]\w*\s*[\[=\(]|return |if |for |while |raise '
+        r'|break\b|continue\b|pass\b|print\()'
+    )
+    lines3 = []
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        indent2 = len(line) - len(stripped)
+        prefix2 = ' ' * indent2
+        if _re.search(r'\S {4,}\S', stripped):
+            chunks = _re.split(r' {4,}', stripped)
+            if len(chunks) > 1 and all(_STMT_START2.match(c.strip()) for c in chunks if c.strip()):
+                lines3.extend(prefix2 + c.strip() for c in chunks if c.strip())
+                continue
+        lines3.append(line)
+    return '\n'.join(lines3)
 
 
 def _syntax_check(code: str) -> tuple[bool, str]:

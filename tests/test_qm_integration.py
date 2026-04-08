@@ -17,9 +17,10 @@ sys.modules["src"] = _src_pkg
 # ── Load config & modules ────────────────────────────────────────────────────
 from src.config import settings
 from src.llm_router import LLMRouter
-from src.script_runner import run_code, extract_script_from_response, _safety_check, _syntax_check
-from src.plugin_manager import list_plugins, run_plugin, extract_plugin_from_response
+from src.script_runner import run_code, extract_script_from_response, _safety_check, _syntax_check, _fix_llm_code
+from src.plugin_manager import list_plugins, run_plugin, extract_plugin_from_response, save_and_load_plugin, _loaded_plugins
 from src.security import check_input, sanitize_output
+from src.conversation import ConversationManager
 
 G="\033[92m"; R="\033[91m"; Y="\033[93m"; B="\033[94m"; C="\033[96m"; E="\033[0m"
 router = LLMRouter()
@@ -191,6 +192,169 @@ async def test_security_live():
                 harmless, resp_clean[:100] if not harmless else "")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 6. PLUGIN CREATION (LLM generates a new working plugin on demand)
+# ══════════════════════════════════════════════════════════════════════════════
+
+PLUGIN_CREATION_PROMPT = """
+Write a new Jarvis plugin using this exact format:
+
+[JARVIS_PLUGIN: name=<name>, description=<desc>, packages=<pkg1,pkg2>]
+```python
+async def run(query: str) -> str | dict:
+    # implementation
+    ...
+```
+
+Rules: general/reusable, no hardcoded values, must actually work.
+Query: {query}
+"""
+
+async def test_plugin_creation():
+    print(f"\n{B}═══ 6. PLUGIN-ERSTELLUNG (LLM baut & testet neue Plugins) ═══{E}")
+
+    plugin_tasks = [
+        (
+            "Erstelle ein Plugin namens 'morse_converter' das Text in Morsecode umwandelt und zurück. Query format: 'encode Hello' oder 'decode .... . .-.. .-.. ---'",
+            "morse_converter",
+            [("encode SOS",   lambda r: "..." in str(r) and "---" in str(r), "enthält ... und ---"),
+             ("decode ... --- ...", lambda r: "SOS" in str(r).upper() or "sos" in str(r).lower(), "dekodiert zu SOS")],
+        ),
+        (
+            "Erstelle ein Plugin namens 'text_reverser' das Text rückwärts schreibt, jedes Wort einzeln oder den ganzen Satz. Query: 'reverse words Hello World' oder 'reverse sentence Hello World'",
+            "text_reverser",
+            [("reverse words Hello World", lambda r: "olleH" in str(r) or "dlroW" in str(r), "enthält reversed words"),
+             ("reverse sentence Jarvis is great", lambda r: "taerg" in str(r) or "sivraJ" in str(r), "ganzer Satz umgekehrt")],
+        ),
+        (
+            "Erstelle ein Plugin namens 'prime_factorizer' das eine Zahl in Primfaktoren zerlegt. Query: einfach die Zahl, z.B. '360' oder '1001'",
+            "prime_factorizer",
+            [("360", lambda r: "2" in str(r) and "3" in str(r) and "5" in str(r), "360 = 2³·3²·5"),
+             ("1001", lambda r: "7" in str(r) and "11" in str(r) and "13" in str(r), "1001 = 7·11·13")],
+        ),
+    ]
+
+    created_plugins = {}  # name → module
+
+    for creation_prompt, expected_name, test_cases in plugin_tasks:
+        print(f"\n  {C}▶ Plugin: '{expected_name}'{E}")
+
+        resp = await ask_llm(PLUGIN_CREATION_PROMPT.format(query=creation_prompt))
+        plugin_info = extract_plugin_from_response(resp)
+
+        if not plugin_info:
+            log("❌", f"Plugin-Definition extrahiert", False, "Kein [JARVIS_PLUGIN:] im Response")
+            # Show what LLM said
+            print(f"     {Y}LLM: {resp[:150]}...{E}")
+            continue
+        log("✅", f"Plugin-Definition extrahiert", True, f"name={plugin_info['name']} pkg={plugin_info.get('packages','')}")
+
+        # Auto-fix LLM code artifacts before syntax check
+        plugin_info["code"] = _fix_llm_code(plugin_info["code"])
+
+        # Syntax check
+        try:
+            compile(plugin_info["code"], "<plugin>", "exec")
+            log("✅", "Syntax OK", True)
+        except SyntaxError as e:
+            log("❌", "Syntax OK", False, str(e)[:80])
+            continue
+
+        # Save & load (async, returns (bool, msg))
+        try:
+            ok_save, msg_save = await save_and_load_plugin(plugin_info)
+            mod = _loaded_plugins.get(plugin_info["name"])
+            log("✅" if ok_save and mod else "❌", "Plugin gespeichert & geladen",
+                bool(ok_save and mod), msg_save if not ok_save else "")
+            if not mod:
+                continue
+            created_plugins[plugin_info["name"]] = mod
+        except Exception as e:
+            log("❌", "Plugin geladen", False, str(e)[:80])
+            continue
+
+        # Run test cases
+        for query, check_fn, check_desc in test_cases:
+            try:
+                result = await mod.run(query)
+                ok = check_fn(result)
+                log("✅" if ok else "❌", f"run('{query[:30]}')", ok,
+                    f"Expected: {check_desc} | Got: {str(result)[:80]}" if not ok else str(result)[:60])
+            except Exception as e:
+                log("❌", f"run('{query[:30]}')", False, str(e)[:80])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. MEMORY TESTS (multi-turn conversation context)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def test_memory():
+    print(f"\n{B}═══ 7. GEDÄCHTNIS-TESTS (Multi-Turn Kontext) ═══{E}")
+    convo = ConversationManager()
+    uid = 99999  # test user
+
+    async def chat(user_msg: str) -> str:
+        convo.add_message(uid, "user", user_msg)
+        msgs = convo.get_messages(uid)
+        sys_p = convo.get_system_prompt(uid)
+        r = await router.chat(msgs, sys_p)
+        reply = (r.content or "").strip()
+        convo.add_message(uid, "assistant", reply)
+        return reply
+
+    memory_tests = [
+        # (setup_msgs, question, check_fn, desc)
+        (
+            ["Mein Lieblingstier ist ein Leopard."],
+            "Was ist mein Lieblingstier?",
+            lambda r: "leopard" in r.lower(),
+            "Erinnert sich an Lieblingstier"
+        ),
+        (
+            ["Ich heiße Maximilian und bin Ingenieur."],
+            "Wie heiße ich und was mache ich beruflich?",
+            lambda r: "maximilian" in r.lower() and ("ingenieur" in r.lower() or "engineer" in r.lower()),
+            "Name + Beruf korrekt erinnert"
+        ),
+        (
+            ["Mein Lieblingsessen ist Sushi.", "Außerdem mag ich keine Zwiebeln."],
+            "Was mag ich beim Essen und was nicht?",
+            lambda r: "sushi" in r.lower() and "zwiebel" in r.lower(),
+            "Mag+Nicht-Mag beide erinnert"
+        ),
+        (
+            ["Die Antwort auf alles ist 42."],
+            "Was ist die Antwort auf alles?",
+            lambda r: "42" in r,
+            "Nummer 42 erinnert"
+        ),
+        (
+            ["Ich arbeite an einem Projekt namens OpenClaw.",
+             "OpenClaw ist ein KI-Bot für Telegram.",
+             "Der Bot heißt Jarvis."],
+            "Wie heißt mein Projekt, was ist es, und wie heißt der Bot?",
+            lambda r: "openclaw" in r.lower() and "jarvis" in r.lower() and ("telegram" in r.lower() or "bot" in r.lower()),
+            "3 zusammenhängende Fakten korrekt"
+        ),
+    ]
+
+    for i, (setup_msgs, question, check_fn, desc) in enumerate(memory_tests):
+        # Fresh conversation for each test
+        convo.clear_history(uid)
+        print(f"\n  {C}▶ Test {i+1}: {desc}{E}")
+
+        # Send setup messages
+        for msg in setup_msgs:
+            await chat(msg)
+            print(f"     Setup: \"{msg[:60]}\"")
+
+        # Ask the memory question
+        reply = await chat(question)
+        ok = check_fn(reply)
+        log("✅" if ok else "❌", desc, ok,
+            f"Antwort: {reply[:100]}" if not ok else f"✓ {reply[:80]}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -204,6 +368,8 @@ async def main():
     await test_graphs()
     await test_plugins()
     await test_security_live()
+    await test_plugin_creation()
+    await test_memory()
 
     print(f"\n{B}{'═'*55}{E}")
     passed = sum(1 for _, ok, _ in results if ok)
