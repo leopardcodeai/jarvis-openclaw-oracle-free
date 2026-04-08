@@ -13,6 +13,7 @@ from .llm_router import router
 from .conversation import conversations
 from .oracle_monitor import OracleMonitor
 from .youtube_monitor import YouTubeMonitor
+from .web_search import search, format_results_for_llm, format_results_for_telegram
 
 oracle_monitor: OracleMonitor | None = None
 youtube_monitor: YouTubeMonitor | None = None
@@ -154,6 +155,31 @@ async def resetprompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("✅ System-Prompt auf Standard zurückgesetzt.")
 
 
+SEARCH_TRIGGERS = [
+    "such", "google", "finde", "search", "was ist", "wer ist",
+    "aktuell", "heute", "news", "neueste", "preis", "wetter",
+    "wann", "wie viel", "wie viele", "aktienkurs"
+]
+
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /search <query> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("Verwendung: `/search <Suchbegriff>`", parse_mode="Markdown")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    results = await search(query)
+    msg = format_results_for_telegram(query, results)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n\n_(Ergebnisse gekürzt)_"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages."""
     user = update.effective_user
@@ -169,8 +195,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Add user message to history
-    conversations.add_message(user_id, "user", user_message)
+    # Auto web search if message contains trigger words
+    search_context = ""
+    msg_lower = user_message.lower()
+    if any(trigger in msg_lower for trigger in SEARCH_TRIGGERS):
+        results = await search(user_message, max_results=3)
+        if results:
+            search_context = "\n\n[Aktuelle Web-Infos]\n" + format_results_for_llm(user_message, results)
+            logger.info(f"Auto-search triggered for: {user_message[:40]}")
+    
+    # Add user message to history (with search context if found)
+    full_message = user_message + search_context if search_context else user_message
+    conversations.add_message(user_id, "user", full_message)
     
     # Get conversation history and system prompt
     messages = conversations.get_messages(user_id)
@@ -252,6 +288,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("heartbeat", heartbeat_command))
+    application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("setprompt", setprompt_command))
     application.add_handler(CommandHandler("resetprompt", resetprompt_command))
     
