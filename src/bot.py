@@ -576,15 +576,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context_parts.append(format_results_for_llm(user_message, results))
             logger.info(f"Auto-search: {user_message[:40]}")
 
-    # Build full message with context
-    search_context = "\n\n" + "\n\n".join(context_parts) if context_parts else ""
-    full_message = user_message + search_context if search_context else user_message
-    conversations.add_message(user_id, "user", full_message)
-    
-    # Get conversation history and system prompt
-    messages = conversations.get_messages(user_id)
+    # Store ONLY the clean user message in history (no tool context)
+    conversations.add_message(user_id, "user", user_message)
+
+    # Build tool context string (only for this LLM call, not stored)
+    tool_context = "\n\n" + "\n\n".join(context_parts) if context_parts else ""
+
+    # Get history and inject tool context into last message for current LLM call
     system_prompt = conversations.get_system_prompt(user_id)
-    
+    if tool_context:
+        messages = conversations.get_messages_with_context(user_id, tool_context)
+    else:
+        messages = conversations.get_messages(user_id)
+
     # Call LLM
     response = await router.chat(messages, system_prompt)
     

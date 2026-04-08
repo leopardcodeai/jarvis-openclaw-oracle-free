@@ -22,18 +22,25 @@ class ConversationManager:
 Du sprichst deinen Nutzer respektvoll mit "Captain" oder "Captain Leopard" an.
 Du bist intelligent, loyal, leicht humorvoll und immer hilfsbereit - wie der echte Jarvis aus Iron Man.
 Du antwortest präzise und auf Deutsch, es sei denn der Captain schreibt in einer anderen Sprache.
-Du kannst bei verschiedenen Aufgaben helfen: Fragen beantworten, Texte schreiben, Ideen entwickeln, recherchieren und mehr."""
+
+WICHTIG – Gesprächskontext:
+- Du hast Zugriff auf den vollständigen Gesprächsverlauf dieser Sitzung.
+- Bei Nachfragen ("was meinst du damit?", "erkläre das nochmal", "und wie?", "warum?") beziehst du dich IMMER auf das direkt vorherige Thema.
+- Merke dir was der Captain dir in dieser Sitzung gesagt hat – Namen, Entscheidungen, Präferenzen.
+- Wenn Kontext aus vorherigen Nachrichten in eckigen Klammern [wie diese] beigefügt ist, nutze ihn als Hintergrundwissen für deine Antwort.
+- Du kannst bei verschiedenen Aufgaben helfen: Fragen beantworten, Texte schreiben, Ideen entwickeln, recherchieren und mehr."""
     
     def add_message(self, user_id: int, role: str, content: str) -> None:
-        """Add a message to user's history."""
+        """Add a message to user's history. Always stores clean content without injected tool context."""
         if user_id not in self._histories:
             self._histories[user_id] = []
         
         self._histories[user_id].append(Message(role=role, content=content))
         
-        # Trim history if too long
+        # Trim history if too long – keep pairs (user+assistant) to preserve context
         max_len = settings.max_history_length
         if len(self._histories[user_id]) > max_len:
+            # Always trim from the front, keep newest messages
             self._histories[user_id] = self._histories[user_id][-max_len:]
     
     def get_messages(self, user_id: int) -> List[dict]:
@@ -45,6 +52,40 @@ Du kannst bei verschiedenen Aufgaben helfen: Fragen beantworten, Texte schreiben
             {"role": msg.role, "content": msg.content}
             for msg in self._histories[user_id]
         ]
+
+    def get_messages_with_context(self, user_id: int, tool_context: str) -> List[dict]:
+        """Get history but inject tool context into the last user message for the current LLM call.
+        The tool context is NOT stored permanently – only used for this one call."""
+        messages = self.get_messages(user_id)
+        if not messages or not tool_context:
+            return messages
+        
+        # Find last user message and enrich it with live tool context
+        enriched = [dict(m) for m in messages]
+        for i in reversed(range(len(enriched))):
+            if enriched[i]["role"] == "user":
+                enriched[i] = {
+                    "role": "user",
+                    "content": enriched[i]["content"] + tool_context
+                }
+                break
+        return enriched
+
+    def get_history_summary(self, user_id: int) -> str:
+        """Return a short plain-text summary of recent topics for context awareness."""
+        if user_id not in self._histories or not self._histories[user_id]:
+            return ""
+        msgs = self._histories[user_id][-10:]
+        lines = []
+        for m in msgs:
+            prefix = "Captain" if m.role == "user" else "Jarvis"
+            snippet = m.content[:120].replace("\n", " ")
+            lines.append(f"{prefix}: {snippet}")
+        return "\n".join(lines)
+
+    def message_count(self, user_id: int) -> int:
+        """Return number of stored messages for this user."""
+        return len(self._histories.get(user_id, []))
     
     def get_system_prompt(self, user_id: int) -> str:
         """Get system prompt for user."""
