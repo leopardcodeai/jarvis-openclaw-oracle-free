@@ -42,5 +42,5 @@ async def transcribe_voice(ogg_bytes: bytes) -> tuple[str, str]:
         finally:
             os.unlink(tmp_path)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run)

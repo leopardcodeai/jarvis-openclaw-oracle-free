@@ -984,31 +984,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             context_parts.append(format_results_for_llm(user_message, results))
             logger.info(f"Auto-search: {user_message[:40]}")
 
-    # Inject loaded plugins as context
+    # Inject loaded plugins as context – ONLY if query is relevant to a plugin
     loaded = list_plugins()
     if loaded:
-        import os as _os
+        import os as _os, re as _re
         _plugins_abs = _os.path.abspath("plugins")
-        plugin_ctx = "[Geladene Plugins – nutze JARVIS_EXEC um sie aufzurufen]\n"
-        for p in loaded:
-            plugin_ctx += f"• `{p['name']}`: {p['description']}\n"
-        plugin_ctx += (
-            f"\nUm ein Plugin zu nutzen, schreibe ein JARVIS_EXEC-Script EXAKT so:\n"
-            f"```python\n"
-            f"import sys, importlib, asyncio, base64\n"
-            f"sys.path.insert(0, r'{_plugins_abs}')\n"
-            f"mod = importlib.import_module('<plugin_name>')\n"
-            f"result = asyncio.run(mod.run('<query>'))\n"
-            f"if isinstance(result, dict) and result.get('type') == 'photo':\n"
-            f"    print('JARVIS_IMAGE:' + base64.b64encode(result['bytes']).decode())\n"
-            f"else:\n"
-            f"    print(result)\n"
-            f"```"
-        )
-        context_parts.append(plugin_ctx)
 
-    # Search script library for relevant scripts and add as context
-    lib_scripts = await search_scripts(user_message)
+        # Only show plugins whose name/description keywords appear in the message
+        def _plugin_relevant(p: dict) -> bool:
+            keywords = _re.sub(r'[_\-]', ' ', p['name'] + ' ' + p['description']).lower().split()
+            # Keep only meaningful words (≥4 chars)
+            keywords = [k for k in keywords if len(k) >= 4]
+            return any(k in msg_lower for k in keywords)
+
+        relevant_plugins = [p for p in loaded if _plugin_relevant(p)]
+        if relevant_plugins:
+            plugin_ctx = "[Geladenes Plugin verfügbar – nutze JARVIS_EXEC um es aufzurufen]\n"
+            for p in relevant_plugins:
+                plugin_ctx += f"• `{p['name']}`: {p['description']}\n"
+            plugin_ctx += (
+                f"\nAufruf-Template:\n"
+                f"```python\n"
+                f"import sys, importlib, asyncio, base64\n"
+                f"sys.path.insert(0, r'{_plugins_abs}')\n"
+                f"mod = importlib.import_module('<plugin_name>')\n"
+                f"result = asyncio.run(mod.run('<query>'))\n"
+                f"if isinstance(result, dict) and result.get('type') == 'photo':\n"
+                f"    print('JARVIS_IMAGE:' + base64.b64encode(result['bytes']).decode())\n"
+                f"else:\n"
+                f"    print(result)\n"
+                f"```"
+            )
+            context_parts.append(plugin_ctx)
+
+    # Search script library – only for queries that clearly need computation/generation
+    _SCRIPT_TRIGGERS = ["berechn", "generier", "erstell", "konvertier", "sortier",
+                        "skript", "script", "code", "qr", "barcode", "liste erstell",
+                        "fibonacci", "primzahl", "statistik", "csv", "json", "format"]
+    _needs_script = any(t in msg_lower for t in _SCRIPT_TRIGGERS)
+    lib_scripts = await search_scripts(user_message) if _needs_script else []
     if lib_scripts:
         lib_context = "[Script Library Context]\n"
         for s in lib_scripts[:3]:
