@@ -875,7 +875,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if weather_data:
                     context_parts.append(format_weather_for_llm(weather_data))
         else:
-            # No city detected → text weather (e.g. "wie ist das Wetter?")
+            # No city detected → use Captain's home city Munich
             weather_data = await get_weather("München")
             if weather_data:
                 context_parts.append(format_weather_for_llm(weather_data))
