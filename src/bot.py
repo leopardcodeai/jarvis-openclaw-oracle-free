@@ -981,6 +981,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             context_parts.append(format_results_for_llm(user_message, results))
             logger.info(f"Auto-search: {user_message[:40]}")
 
+    # Inject loaded plugins as context
+    loaded = list_plugins()
+    if loaded:
+        plugin_ctx = "[Geladene Plugins – nutze JARVIS_EXEC um sie aufzurufen]\n"
+        for p in loaded:
+            plugin_ctx += f"• `{p['name']}`: {p['description']}\n"
+        plugin_ctx += (
+            "\nUm ein Plugin zu nutzen, schreibe ein JARVIS_EXEC-Script das es importiert:\n"
+            "```python\nimport sys, asyncio\n"
+            "sys.path.insert(0, 'plugins')\n"
+            "import importlib, asyncio\n"
+            "mod = importlib.import_module('<plugin_name>')\n"
+            "result = asyncio.run(mod.run('<query>'))\n"
+            "# Wenn result ein dict mit type='photo' ist:\n"
+            "if isinstance(result, dict) and result.get('type') == 'photo':\n"
+            "    import base64; print('JARVIS_IMAGE:' + base64.b64encode(result['bytes']).decode())\n"
+            "else:\n    print(result)\n```"
+        )
+        context_parts.append(plugin_ctx)
+
     # Search script library for relevant scripts and add as context
     lib_scripts = await search_scripts(user_message)
     if lib_scripts:
@@ -1065,6 +1085,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             code=script_info["code"],
             last_output=output_str[:2000],
         )
+
+        # Check if output is an image
+        stdout = run_result.get("stdout", "") or ""
+        if stdout.startswith("JARVIS_IMAGE:"):
+            import base64 as _b64
+            img_data = _b64.b64decode(stdout[len("JARVIS_IMAGE:"):].strip())
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=img_data,
+                caption=f"🖼 {script_info['name']}"
+            )
+            conversations.add_message(user_id, "assistant", response.content)
+            return
 
         # Show execution result
         exec_msg = format_run_result(run_result, script_info["name"])
