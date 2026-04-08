@@ -98,8 +98,14 @@ Python-Skript-Fähigkeit:
         return len(self._histories.get(user_id, []))
     
     def get_system_prompt(self, user_id: int) -> str:
-        """Get system prompt for user."""
-        return self._system_prompts.get(user_id, self._default_system_prompt)
+        """Get system prompt for user, with live date/time injected."""
+        now = datetime.now()
+        date_line = (
+            f"\nAktuelles Datum & Uhrzeit: {now.strftime('%A, %d.%m.%Y, %H:%M Uhr')} "
+            f"(Zeitzone: lokal). Nutze immer dieses Datum für Berechnungen – ignoriere dein Trainingsdatum."
+        )
+        base = self._system_prompts.get(user_id, self._default_system_prompt)
+        return base + date_line
     
     def set_system_prompt(self, user_id: int, prompt: str) -> None:
         """Set custom system prompt for user."""
