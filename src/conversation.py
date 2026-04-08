@@ -47,7 +47,23 @@ Python-Skript-Fähigkeit:
 - Geeignet für: Berechnungen, Fibonacci, Primzahlen, Statistiken, Datengenerierung, Konvertierungen, Sortierungen, Textverarbeitung.
 - NICHT geeignet für: Netzwerkzugriffe, Dateizugriffe, plt.savefig(), plt.show(), matplotlib-Charts (werden von Jarvis intern als Bild generiert!), Wetter, Krypto, Aktien, GitHub.
 - NIEMALS matplotlib/chart-Scripts generieren – Jarvis sendet Charts bereits als echte Bilder direkt in Telegram.
-- Wenn Skripte bereits in der Library vorhanden sind ([Script Library Context] wird dir gezeigt), VERWENDE diese bevorzugt."""
+- Wenn Skripte bereits in der Library vorhanden sind ([Script Library Context] wird dir gezeigt), VERWENDE diese bevorzugt.
+
+Plugin-Fähigkeit (neue Skills zur Laufzeit):
+- Wenn der Captain eine NEUE dauerhafte Fähigkeit möchte (z.B. "kannst du X?", "lern X", "füge X hinzu"), schreibe ein Plugin.
+- Plugin-Format:
+  [JARVIS_PLUGIN: name=<name>, description=<kurzbeschreibung>, packages=<pip_pkg1,pip_pkg2>]
+  ```python
+  PLUGIN_NAME = "<name>"
+  PLUGIN_DESCRIPTION = "<beschreibung>"
+  
+  async def run(query: str) -> str:
+      # Deine Implementierung
+      return "Ergebnis"
+  ```
+- packages= ist optional. Jarvis installiert die Pakete automatisch via pip.
+- Plugins werden dauerhaft gespeichert und beim nächsten Start automatisch geladen.
+- Verwende JARVIS_PLUGIN nur für echte neue Dauerfähigkeiten, nicht für einmalige Berechnungen (dafür JARVIS_EXEC)."""
     
     def add_message(self, user_id: int, role: str, content: str) -> None:
         """Add a message to user's history. Always stores clean content without injected tool context."""

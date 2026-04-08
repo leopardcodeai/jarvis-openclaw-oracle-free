@@ -22,6 +22,9 @@ from .sysadmin import (run_command as sys_run, format_result as sys_format_resul
                        ALLOWED_COMMAND_KEYS, get_system_stats, format_system_stats)
 from .youtube_monitor import resolve_channel_id as yt_resolve_channel_id
 from .voice_transcriber import transcribe_voice
+from .plugin_manager import (pip_install, list_installed, list_plugins,
+                              run_plugin, extract_plugin_from_response,
+                              save_and_load_plugin)
 from .script_runner import (
     run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
     update_last_output, extract_script_from_response,
@@ -459,6 +462,37 @@ async def tempgraph_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         caption=caption,
         parse_mode="Markdown"
     )
+
+
+async def install_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /install <package> – install a pip package at runtime."""
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        installed = list_installed()
+        msg = "📦 *Installierte Pakete:*\n" + ("\n".join(f"• `{p}`" for p in installed) if installed else "_keine_")
+        msg += "\n\nVerwendung: `/install <paketname>`"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+    package = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await update.message.reply_text(f"📦 Installiere `{package}`...", parse_mode="Markdown")
+    ok, msg = await pip_install(package)
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def plugins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /plugins – list all loaded plugins."""
+    if not is_authorized(update.effective_user.id):
+        return
+    plugins = list_plugins()
+    if not plugins:
+        await update.message.reply_text("🔌 Keine Plugins geladen.\nJarvis kann neue schreiben wenn du ihn darum bittest!")
+        return
+    lines = ["🔌 *Geladene Plugins:*\n"]
+    for p in plugins:
+        lines.append(f"• `{p['name']}` – {p['description']}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def ytid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -970,6 +1004,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(error_msg)
         return
 
+    # ── Plugin auto-save ──────────────────────────────────────────────────────
+    plugin_info = extract_plugin_from_response(response.content)
+    if plugin_info:
+        logger.info(f"Plugin detected: {plugin_info['name']}")
+        await update.message.reply_text(
+            f"🔌 *Jarvis erstellt Plugin: `{plugin_info['name']}`*",
+            parse_mode="Markdown"
+        )
+        if plugin_info.get("packages"):
+            await update.message.reply_text(
+                f"📦 Installiere: `{', '.join(plugin_info['packages'])}`...",
+                parse_mode="Markdown"
+            )
+        ok, msg = await save_and_load_plugin(plugin_info)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        if ok:
+            await update.message.reply_text(
+                f"✅ Plugin `{plugin_info['name']}` ist jetzt aktiv!\n"
+                f"Aufruf mit: `/plugins`",
+                parse_mode="Markdown"
+            )
+        conversations.add_message(user_id, "assistant", response.content)
+        return
+
     # ── Script auto-execution ─────────────────────────────────────────────────
     script_info = extract_script_from_response(response.content)
     if script_info:
@@ -1136,6 +1194,8 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
+    application.add_handler(CommandHandler("install", install_command))
+    application.add_handler(CommandHandler("plugins", plugins_command))
     application.add_handler(CommandHandler("ytid", ytid_command))
     application.add_handler(CommandHandler("scripts", scripts_command))
     application.add_handler(CommandHandler("runscript", runscript_command))
