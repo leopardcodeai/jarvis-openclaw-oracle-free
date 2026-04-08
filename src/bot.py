@@ -1082,16 +1082,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         run_result = await run_code(script_info["code"])
 
-        # ── Self-healing: retry up to 2x on failure ────────────────────────────
+        # ── Self-healing: retry up to 2x on failure OR wrong output type ─────────
         _MAX_RETRIES = 2
-        for _retry in range(_MAX_RETRIES):
-            if run_result["success"]:
-                break
-            _err = (run_result.get("stderr") or run_result.get("error") or "Unbekannter Fehler")[:600]
-            logger.info(f"Script failed (attempt {_retry+1}), self-healing: {_err[:80]}")
+        _IMAGE_KEYWORDS = ["bild", "foto", "image", "photo", "icon", "qr", "barcode",
+                           "grafik", "picture", "generate", "erstell", "zeichn"]
+        _expects_image = any(k in msg_lower for k in _IMAGE_KEYWORDS)
 
+        for _retry in range(_MAX_RETRIES):
+            _stdout = (run_result.get("stdout") or "").strip()
+            _err = (run_result.get("stderr") or run_result.get("error") or "").strip()
+
+            # Detect failure cases
+            _failed = not run_result["success"]
+            _wrong_type = (_expects_image and run_result["success"]
+                           and not _stdout.startswith("JARVIS_IMAGE:")
+                           and len(_stdout) < 500)  # got short text instead of image
+
+            if not _failed and not _wrong_type:
+                break
+
+            if _failed:
+                _reason = f"Script fehlgeschlagen:\n```\n{_err[:500]}\n```"
+                _hint = "Korrigiere den Fehler und schreibe das Script komplett neu mit [JARVIS_EXEC]."
+            else:
+                _reason = f"Script lief durch, aber gab Text statt Bild zurück: `{_stdout[:100]}`"
+                _hint = ("Der Captain erwartet ein echtes Bild als Ausgabe (JARVIS_IMAGE:<base64>). "
+                         "Schreibe das Script neu, das ein echtes Bild generiert und mit "
+                         "`print('JARVIS_IMAGE:' + base64.b64encode(img_bytes).decode())` ausgibt.")
+
+            logger.info(f"Self-healing attempt {_retry+1}: {'failure' if _failed else 'wrong output type'}")
             _status = await update.message.reply_text(
-                f"🔄 Fehler erkannt, repariere... _(Versuch {_retry+2}/{_MAX_RETRIES+1})_",
+                f"🔄 {'Fehler' if _failed else 'Falsches Ergebnis'} erkannt, korrigiere... "
+                f"_(Versuch {_retry+2}/{_MAX_RETRIES+1})_",
                 parse_mode="Markdown"
             )
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -1099,10 +1121,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
             _fix_msgs = conversations.get_messages(user_id) + [{
                 "role": "user",
                 "content": (
-                    f"[SELBSTKORREKTUR] Das Script `{script_info['name']}` ist fehlgeschlagen:\n"
-                    f"```\n{_err}\n```\n"
-                    f"Ursprüngliche Anfrage: {user_message[:200]}\n"
-                    f"Korrigiere den Fehler und schreibe das Script komplett neu mit [JARVIS_EXEC]."
+                    f"[SELBSTKORREKTUR] {_reason}\n"
+                    f"Ursprüngliche Anfrage: {user_message[:200]}\n{_hint}"
                 )
             }]
             _fix_resp = await router.chat(_fix_msgs, system_prompt)
@@ -1116,7 +1136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
 
             run_result = await run_code(_new_script["code"])
             script_info = _new_script
-            response = _fix_resp  # update response reference
+            response = _fix_resp
         # ── End self-healing ───────────────────────────────────────────────────
 
         # Save to library with output

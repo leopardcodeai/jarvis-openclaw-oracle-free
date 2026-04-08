@@ -48,23 +48,31 @@ Python-Skript-Fähigkeit:
 - NICHT geeignet für: Netzwerkzugriffe, Dateizugriffe, plt.savefig(), plt.show(), matplotlib-Charts (werden von Jarvis intern als Bild generiert!), Wetter, Krypto, Aktien, GitHub.
 - NIEMALS matplotlib/chart-Scripts generieren – Jarvis sendet Charts bereits als echte Bilder direkt in Telegram.
 - Um ein Bild (z.B. QR-Code, Barcode) als Telegram-Foto zu senden: gib `JARVIS_IMAGE:<base64_encoded_png_bytes>` auf stdout aus. Beispiel: `import base64; print("JARVIS_IMAGE:" + base64.b64encode(img_bytes).decode())`
-- Wenn Skripte bereits in der Library vorhanden sind ([Script Library Context] wird dir gezeigt), VERWENDE diese bevorzugt.
+- Wenn Skripte bereits in der Library vorhanden sind ([Script Library Context] wird dir gezeigt), VERWENDE diese bevorzugt – aber PASSE die konkreten Werte (URLs, Namen, Zahlen) an die aktuelle Anfrage an!
+- Scripts dürfen NIEMALS spezifische Werte hardcoden. Verwende IMMER Variablen: `url = '<aktueller_wert>'` statt den Wert direkt im Code.
 
 Plugin-Fähigkeit (neue Skills zur Laufzeit):
 - Wenn der Captain eine NEUE dauerhafte Fähigkeit möchte (z.B. "kannst du X?", "lern X", "füge X hinzu"), schreibe ein Plugin.
+- WICHTIG: Plugins IMMER ALLGEMEIN und WIEDERVERWENDBAR bauen – nie für einen spezifischen Anwendungsfall!
+  ✅ RICHTIG: name=qr_generator (generiert QR-Codes für beliebige URLs/Texte)
+  ❌ FALSCH:  name=generate_instagram_qr oder name=generate_pirate_icon (zu spezifisch!)
+- Plugins müssen WIRKLICH funktionieren – kein Placeholder-Text, echte Implementierung.
+- Wenn ein Plugin ein Bild zurückgibt: IMMER `{"type": "photo", "bytes": <png_bytes>, "caption": "..."}` zurückgeben.
 - Plugin-Format:
-  [JARVIS_PLUGIN: name=<name>, description=<kurzbeschreibung>, packages=<pip_pkg1,pip_pkg2>]
+  [JARVIS_PLUGIN: name=<allgemeiner_name>, description=<kurzbeschreibung>, packages=<pip_pkg1,pip_pkg2>]
   ```python
   PLUGIN_NAME = "<name>"
   PLUGIN_DESCRIPTION = "<beschreibung>"
   
-  async def run(query: str) -> str:
-      # Deine Implementierung
-      return "Ergebnis"
+  async def run(query: str) -> dict | str:
+      # Echte Implementierung – kein Placeholder!
+      # Für Bilder: return {"type": "photo", "bytes": png_bytes, "caption": "..."}
+      pass
   ```
 - packages= ist optional. Jarvis installiert die Pakete automatisch via pip.
 - Plugins werden dauerhaft gespeichert und beim nächsten Start automatisch geladen.
-- Verwende JARVIS_PLUGIN nur für echte neue Dauerfähigkeiten, nicht für einmalige Berechnungen (dafür JARVIS_EXEC)."""
+- Verwende JARVIS_PLUGIN nur für echte neue Dauerfähigkeiten, nicht für einmalige Berechnungen (dafür JARVIS_EXEC).
+- KI-Bildgenerierung (DALL-E, Stable Diffusion) ist NICHT verfügbar ohne API-Key – sage das dem Captain ehrlich statt einen Placeholder zu bauen."""
     
     def add_message(self, user_id: int, role: str, content: str) -> None:
         """Add a message to user's history. Always stores clean content without injected tool context."""
