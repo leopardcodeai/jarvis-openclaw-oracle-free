@@ -1078,9 +1078,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 parse_mode="Markdown"
             )
 
-        # Execute the script
+        # Execute the script – with self-healing retry loop
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         run_result = await run_code(script_info["code"])
+
+        # ── Self-healing: retry up to 2x on failure ────────────────────────────
+        _MAX_RETRIES = 2
+        for _retry in range(_MAX_RETRIES):
+            if run_result["success"]:
+                break
+            _err = (run_result.get("stderr") or run_result.get("error") or "Unbekannter Fehler")[:600]
+            logger.info(f"Script failed (attempt {_retry+1}), self-healing: {_err[:80]}")
+
+            _status = await update.message.reply_text(
+                f"🔄 Fehler erkannt, repariere... _(Versuch {_retry+2}/{_MAX_RETRIES+1})_",
+                parse_mode="Markdown"
+            )
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+            _fix_msgs = conversations.get_messages(user_id) + [{
+                "role": "user",
+                "content": (
+                    f"[SELBSTKORREKTUR] Das Script `{script_info['name']}` ist fehlgeschlagen:\n"
+                    f"```\n{_err}\n```\n"
+                    f"Ursprüngliche Anfrage: {user_message[:200]}\n"
+                    f"Korrigiere den Fehler und schreibe das Script komplett neu mit [JARVIS_EXEC]."
+                )
+            }]
+            _fix_resp = await router.chat(_fix_msgs, system_prompt)
+            await _status.delete()
+
+            if not _fix_resp.success:
+                break
+            _new_script = extract_script_from_response(_fix_resp.content)
+            if not _new_script:
+                break
+
+            run_result = await run_code(_new_script["code"])
+            script_info = _new_script
+            response = _fix_resp  # update response reference
+        # ── End self-healing ───────────────────────────────────────────────────
 
         # Save to library with output
         output_str = run_result.get("stdout", "") or run_result.get("error", "")
