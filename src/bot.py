@@ -987,20 +987,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
     # Inject loaded plugins as context
     loaded = list_plugins()
     if loaded:
+        import os as _os
+        _plugins_abs = _os.path.abspath("plugins")
         plugin_ctx = "[Geladene Plugins – nutze JARVIS_EXEC um sie aufzurufen]\n"
         for p in loaded:
             plugin_ctx += f"• `{p['name']}`: {p['description']}\n"
         plugin_ctx += (
-            "\nUm ein Plugin zu nutzen, schreibe ein JARVIS_EXEC-Script das es importiert:\n"
-            "```python\nimport sys, asyncio\n"
-            "sys.path.insert(0, 'plugins')\n"
-            "import importlib, asyncio\n"
-            "mod = importlib.import_module('<plugin_name>')\n"
-            "result = asyncio.run(mod.run('<query>'))\n"
-            "# Wenn result ein dict mit type='photo' ist:\n"
-            "if isinstance(result, dict) and result.get('type') == 'photo':\n"
-            "    import base64; print('JARVIS_IMAGE:' + base64.b64encode(result['bytes']).decode())\n"
-            "else:\n    print(result)\n```"
+            f"\nUm ein Plugin zu nutzen, schreibe ein JARVIS_EXEC-Script EXAKT so:\n"
+            f"```python\n"
+            f"import sys, importlib, asyncio, base64\n"
+            f"sys.path.insert(0, r'{_plugins_abs}')\n"
+            f"mod = importlib.import_module('<plugin_name>')\n"
+            f"result = asyncio.run(mod.run('<query>'))\n"
+            f"if isinstance(result, dict) and result.get('type') == 'photo':\n"
+            f"    print('JARVIS_IMAGE:' + base64.b64encode(result['bytes']).decode())\n"
+            f"else:\n"
+            f"    print(result)\n"
+            f"```"
         )
         context_parts.append(plugin_ctx)
 
