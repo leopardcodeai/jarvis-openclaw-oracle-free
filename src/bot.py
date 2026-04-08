@@ -766,14 +766,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {ticker} {period}]")
                 break
 
-    # Weather detection
+    # Weather detection – if a city is identifiable, always send chart image; else text
     if any(t in msg_lower for t in WEATHER_TRIGGERS) and not _is_temp_chart:
-        city_match = re.search(r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
-        city = city_match.group(1) if city_match else "München"
-        weather_data = await get_weather(city)
-        if weather_data:
-            context_parts.append(format_weather_for_llm(weather_data))
-            logger.info(f"Auto-weather: {city}")
+        city = None
+        for pattern in [r'(?:in|für|von|aus)\s+([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)',
+                        r'([A-ZÄÖÜ][a-zäöüß]{2,}(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)\s+(?:wetter|temperatur|regen|sonne)']:
+            m = re.search(pattern, user_message)
+            if m:
+                city = m.group(1)
+                break
+
+        if city:
+            # City found → send chart (24h default, or detected period)
+            temp_period = "24h"
+            if any(x in msg_lower for x in ["48h", "48 stunden", "letzten 48", "letzte 48", "2 tage"]):
+                temp_period = "48h"
+            elif any(x in msg_lower for x in ["7d", "7 tage", "woche"]):
+                temp_period = "7d"
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
+            t_buf, t_meta = await weather_chart(city, temp_period)
+            if t_buf:
+                caption = format_weather_chart_summary(t_meta)
+                await context.bot.send_photo(chat_id=update.effective_chat.id, photo=t_buf,
+                                             caption=caption, parse_mode="Markdown")
+                context_parts.append(
+                    f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm!\n"
+                    f"Wetter-Chart: {city} {temp_period} | "
+                    f"aktuell {t_meta.get('current_temp', '?')}°C | "
+                    f"max {t_meta.get('max_temp', '?')}°C | min {t_meta.get('min_temp', '?')}°C]"
+                )
+                logger.info(f"Auto-weather-chart: {city} {temp_period}")
+            else:
+                # Chart failed, fall back to text
+                weather_data = await get_weather(city)
+                if weather_data:
+                    context_parts.append(format_weather_for_llm(weather_data))
+        else:
+            # No city detected → text weather (e.g. "wie ist das Wetter?")
+            weather_data = await get_weather("München")
+            if weather_data:
+                context_parts.append(format_weather_for_llm(weather_data))
+                logger.info("Auto-weather: no city, text fallback")
 
     # Crypto detection
     if any(t in msg_lower for t in CRYPTO_TRIGGERS):
