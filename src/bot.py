@@ -343,6 +343,15 @@ _TEMP_COMPOUND_KEYWORDS = [
     "wie lief", "24h", "48h", "7d", "14d",
 ]
 
+# Time-based keywords that turn a "wetter" query into a chart request
+_WEATHER_TIME_KEYWORDS = [
+    "stunden", "tage", "letzte", "letzten", "letzte 24", "letzte 48",
+    "historisch", "verlauf", "entwicklung",
+    "graph", "chart", "diagramm", "bild", "visuali",
+    "24h", "48h", "7d", "14d",
+    "wie war", "wie lief", "vergangen",
+]
+
 
 async def _send_chart(update: Update, context, kind: str, symbol: str, period: str):
     """Generate and send a chart image with text summary."""
@@ -692,7 +701,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _is_temp_chart = (
         any(t in msg_lower for t in TEMP_CHART_TRIGGERS)
         or ("temperatur" in msg_lower and any(k in msg_lower for k in _TEMP_COMPOUND_KEYWORDS))
-        or ("wetter" in msg_lower and any(k in msg_lower for k in ["graph", "chart", "diagramm", "bild", "verlauf", "visuali"]))
+        or ("wetter" in msg_lower and any(k in msg_lower for k in _WEATHER_TIME_KEYWORDS))
+        or (any(x in msg_lower for x in ["48 stunden", "48h", "letzten 48", "letzte 48"])
+            and any(w in msg_lower for w in ["wetter", "temperatur", "temp", "grad"]))
     )
     if _is_temp_chart:
         temp_period = "24h"
