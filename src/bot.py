@@ -328,7 +328,23 @@ async def sys_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 CHART_TRIGGERS = ["verlauf", "chart", "graph", "entwicklung", "historisch", "history",
                   "letztes jahr", "letzten monat", "letzten wochen", "letzten 30", "letzten 7",
-                  "wie war", "wie lief", "performance", "rendite", "kurs verlauf"]
+                  "wie war", "wie lief", "performance", "rendite", "kurs verlauf",
+                  "als graph", "als chart", "als bild", "als diagramm",
+                  "aktie", "kurs", "aktienkurs"]
+
+# Company name → ticker mapping for auto chart detection
+COMPANY_TICKERS = {
+    "apple": "AAPL", "microsoft": "MSFT", "google": "GOOGL", "alphabet": "GOOGL",
+    "amazon": "AMZN", "meta": "META", "facebook": "META", "netflix": "NFLX",
+    "tesla": "TSLA", "nvidia": "NVDA", "amd": "AMD", "intel": "INTC",
+    "qualcomm": "QCOM", "paypal": "PYPL", "shopify": "SHOP", "uber": "UBER",
+    "spotify": "SPOT", "coinbase": "COIN", "palantir": "PLTR", "snowflake": "SNOW",
+    "volkswagen": "VOW3.DE", "vw": "VOW3.DE", "bmw": "BMW.DE",
+    "mercedes": "MBG.DE", "siemens": "SIE.DE", "sap": "SAP", "allianz": "ALV.DE",
+    "bayer": "BAYN.DE", "basf": "BAS.DE", "airbus": "AIR.PA",
+    "deutsche bank": "DBK.DE", "daimler": "MBG.DE",
+    "samsung": "005930.KS", "alibaba": "BABA", "tencent": "0700.HK",
+}
 
 TEMP_CHART_TRIGGERS = ["temperatur graph", "temperatur chart", "temp graph", "temp chart",
                        "temperaturverlauf", "temperature graph", "temperature chart",
@@ -746,25 +762,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                       "monat": "1m", "30 tage": "1m", "1m": "1m",
                       "3 monat": "3m", "3m": "3m",
                       "6 monat": "6m", "6m": "6m",
-                      "jahr": "1y", "1 jahr": "1y", "1y": "1y",
+                      "letztes jahr": "1y", "jahr": "1y", "1 jahr": "1y", "1y": "1y",
                       "2 jahr": "2y", "5 jahr": "5y"}
         for kw, p in period_map.items():
             if kw in msg_lower:
                 period = p
                 break
-        # Detect coin
+
+        chart_sent = False
+
+        # 1. Crypto coins
         for coin_key in CHART_COIN_IDS:
             if coin_key in msg_lower and len(coin_key) > 2:
                 await _send_chart(update, context, "crypto", coin_key, period)
                 context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {coin_key.upper()} {period}]")
+                chart_sent = True
                 break
-        else:
-            # Detect stock ticker (2-5 uppercase letters)
-            tickers = re.findall(r'\b([A-Z]{2,5})\b', user_message)
-            for ticker in tickers[:1]:
+
+        if not chart_sent:
+            # 2. Company name → ticker lookup (e.g. "Apple" → AAPL)
+            ticker = None
+            for name, sym in COMPANY_TICKERS.items():
+                if name in msg_lower:
+                    ticker = sym
+                    break
+
+            # 3. Fallback: explicit ALLCAPS ticker in message (e.g. TSLA, AAPL)
+            if not ticker:
+                caps = re.findall(r'\b([A-Z]{2,5})\b', user_message)
+                # Filter out common German/English words
+                _ignore = {"DE", "AG", "KG", "SE", "AS", "AN", "IN", "UND", "MIT",
+                           "AUF", "DAS", "DIE", "DER", "EIN", "ZUM", "ZUR", "NEU"}
+                for t in caps:
+                    if t not in _ignore:
+                        ticker = t
+                        break
+
+            if ticker:
                 await _send_chart(update, context, "stock", ticker, period)
                 context_parts.append(f"[CHART BEREITS ALS BILD GESENDET – KEIN ASCII-Diagramm! {ticker} {period}]")
-                break
 
     # Weather detection – if a city is identifiable, always send chart image; else text
     if any(t in msg_lower for t in WEATHER_TRIGGERS) and not _is_temp_chart:
