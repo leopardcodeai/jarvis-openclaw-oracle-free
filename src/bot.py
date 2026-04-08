@@ -25,6 +25,7 @@ from .voice_transcriber import transcribe_voice
 from .plugin_manager import (pip_install, list_installed, list_plugins,
                               run_plugin, extract_plugin_from_response,
                               save_and_load_plugin)
+from .security import check_input, sanitize_output, check_script_code
 from .script_runner import (
     run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
     update_last_output, extract_script_from_response,
@@ -799,7 +800,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
     
     user_message = override_text or update.message.text
     logger.info(f"Message from {user.first_name} ({user_id}): {user_message[:50]}...")
-    
+
+    # ── Security: prompt injection check ──────────────────────────────────────
+    sec = check_input(user_message, user_id)
+    if sec.blocked:
+        await update.message.reply_text(sec.warning, parse_mode=None)
+        return
+
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -1115,6 +1122,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
 
         # Execute the script – with self-healing retry loop
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        _sec = check_script_code(script_info["code"], user_id)
+        if _sec.blocked:
+            await update.message.reply_text(_sec.warning, parse_mode=None)
+            conversations.add_message(user_id, "assistant", response.content)
+            return
         run_result = await run_code(script_info["code"])
 
         # ── Self-healing: retry up to 2x on failure OR wrong output type ─────────
@@ -1224,7 +1236,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
 
     # ── Normal response ───────────────────────────────────────────────────────
     conversations.add_message(user_id, "assistant", response.content)
-    reply_text = response.content
+    reply_text = sanitize_output(response.content, user_id)  # redact secrets
     if len(reply_text) > 4000:
         reply_text = reply_text[:4000] + "\n\n_(Nachricht gekürzt)_"
     await safe_reply(update.message, reply_text)

@@ -23,15 +23,28 @@ TIMEOUT_SECONDS = 15
 
 # Patterns blocked before execution
 BLOCKED_PATTERNS = [
+    # OS / shell execution
     r"\bos\.system\b", r"\bos\.popen\b", r"\bsubprocess\b",
     r"\bshutil\.rmtree\b", r"\bshutil\.move\b", r"\bos\.remove\b",
     r"\bos\.unlink\b", r"\brm\s+-rf\b",
-    r"open\s*\([^)]*['\"]w['\"]",   # open(..., "w")
-    r"open\s*\([^)]*['\"]a['\"]",   # open(..., "a")
+    # File writes
+    r"open\s*\([^)]*['\"]w['\"]",
+    r"open\s*\([^)]*['\"]a['\"]",
+    # Code execution
     r"\beval\s*\(", r"\bexec\s*\(",
     r"\b__import__\s*\(",
-    r"plt\.savefig\s*\(['\"](?!.*BytesIO)",  # savefig to file path blocked; BytesIO ok
-    r"\bplt\.show\b",                             # plt.show() blocked (headless)
+    # Matplotlib display (BytesIO output allowed)
+    r"plt\.savefig\s*\(['\"](?!.*BytesIO)",
+    r"\bplt\.show\b",
+    # Secret / env access
+    r"\bos\.environ\b", r"\bos\.getenv\b",
+    r"\bdotenv\b", r"load_dotenv",
+    # Sensitive file reads
+    r"open\s*\([^)]*['\"](?:\.env|config\.py|secrets?\.)",
+    # Pickle (arbitrary code via deserialization)
+    r"\bpickle\.loads?\b",
+    # Builtins manipulation
+    r"__builtins__\s*\[",
 ]
 
 
