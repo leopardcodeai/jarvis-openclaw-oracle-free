@@ -30,8 +30,8 @@ BLOCKED_PATTERNS = [
     r"open\s*\([^)]*['\"]a['\"]",   # open(..., "a")
     r"\beval\s*\(", r"\bexec\s*\(",
     r"\b__import__\s*\(",
-    r"\bplt\.savefig\b", r"\bplt\.show\b",  # no chart files
-    r"\bimport\s+matplotlib\b", r"\bfrom\s+matplotlib\b",  # charts handled internally
+    r"plt\.savefig\s*\(['\"](?!.*BytesIO)",  # savefig to file path blocked; BytesIO ok
+    r"\bplt\.show\b",                             # plt.show() blocked (headless)
 ]
 
 
