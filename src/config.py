@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:e2b"
     
+    # Tailscale
+    tailscale_auth_key: Optional[str] = None
+    tailscale_hostname: str = "jarvis-oracle"
+    
     # Bot Settings
     allowed_user_ids: Optional[str] = None
     max_history_length: int = 10

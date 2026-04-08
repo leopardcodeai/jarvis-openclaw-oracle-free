@@ -101,7 +101,7 @@ class OracleMonitor:
         self.chat_id = chat_id
         self._task: asyncio.Task | None = None
         self._instance_found = False
-        self._check_interval = 300  # 5 Minuten
+        self._check_interval = 3600  # 1 Stunde
 
     def start(self):
         """Start the background monitoring task."""
@@ -151,7 +151,7 @@ class OracleMonitor:
             )
             logger.info(f"Instance found! IP: {ip}")
 
-    async def send_heartbeat(self) -> str:
+    async def send_heartbeat(self, youtube_monitor=None) -> str:
         """Generate a heartbeat status message."""
         instance = get_instance_status()
         log = check_retry_log()
@@ -159,22 +159,35 @@ class OracleMonitor:
 
         if instance["found"]:
             ip = instance.get("ip", "unbekannt")
-            return (
-                f"💚 *Heartbeat – {now}*\n\n"
-                f"✅ *Oracle Server läuft!*\n"
-                f"🌐 IP: `{ip}`\n"
-                f"🖥 `{instance['name']}`\n\n"
-                f"`ssh -i ~/.ssh/oracle_openclaw ubuntu@{ip}`"
+            oracle_section = (
+                f"✅ *Oracle Server:* Online\n"
+                f"🌐 IP: `{ip}` | 🖥 `{instance['name']}`"
             )
         else:
             status = "🔄 Läuft" if log["running"] else "⚠️ Gestoppt"
             attempt = log["attempt"] or "?"
             last = log["last_check"] or "?"
-            return (
-                f"💛 *Heartbeat – {now}*\n\n"
-                f"⏳ *Oracle Instance:* Noch nicht verfügbar\n"
-                f"🔁 *Retry-Script:* {status}\n"
-                f"📊 *Versuch:* #{attempt}\n"
-                f"🕐 *Letzter Check:* {last}\n\n"
-                f"Ich benachrichtige Sie sofort wenn der Server online geht, Captain!"
+            oracle_section = (
+                f"⏳ *Oracle Instance:* Nicht verfügbar\n"
+                f"🔁 Retry: {status} | Versuch #{attempt} | {last}"
             )
+
+        yt_section = ""
+        if youtube_monitor:
+            yt = await youtube_monitor.get_status()
+            latest = yt.get("latest")
+            if latest:
+                yt_section = (
+                    f"\n\n🎥 *YouTube {yt['channel']}*\n"
+                    f"📺 _{latest['title']}_\n"
+                    f"📅 {latest['published']} | 🔗 {latest['url']}"
+                )
+            else:
+                yt_section = f"\n\n🎥 *YouTube:* {yt['status']}"
+
+        return (
+            f"{'💚' if instance['found'] else '💛'} *Heartbeat – {now}*\n\n"
+            f"{oracle_section}"
+            f"{yt_section}\n\n"
+            f"_Nächster automatischer Check in 1h_"
+        )

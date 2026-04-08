@@ -12,8 +12,10 @@ from .config import settings
 from .llm_router import router
 from .conversation import conversations
 from .oracle_monitor import OracleMonitor
+from .youtube_monitor import YouTubeMonitor
 
 oracle_monitor: OracleMonitor | None = None
+youtube_monitor: YouTubeMonitor | None = None
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -205,7 +207,7 @@ async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     if oracle_monitor:
-        msg = await oracle_monitor.send_heartbeat()
+        msg = await oracle_monitor.send_heartbeat(youtube_monitor)
     else:
         msg = "⚠️ Oracle Monitor nicht aktiv."
     
@@ -224,12 +226,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def post_init(application: Application) -> None:
     """Start background tasks after bot initializes."""
-    global oracle_monitor
+    global oracle_monitor, youtube_monitor
     allowed = settings.allowed_users
     if allowed:
-        oracle_monitor = OracleMonitor(application.bot, allowed[0])
+        chat_id = allowed[0]
+        oracle_monitor = OracleMonitor(application.bot, chat_id)
         oracle_monitor.start()
-        logger.info(f"Oracle monitor started, will notify {allowed[0]}")
+        youtube_monitor = YouTubeMonitor(application.bot, chat_id)
+        youtube_monitor.start()
+        logger.info(f"Oracle + YouTube monitors started, will notify {chat_id}")
 
 
 def create_application() -> Application:
