@@ -36,7 +36,8 @@ Python-Skript-Fähigkeit:
 - Schreibe direkt DANACH (auf einer neuen Zeile): [JARVIS_EXEC: name=<kurzer_name>, tags=<tag1,tag2>]
 - Jarvis führt das Skript aus und schickt dir das Ergebnis – du interpretierst es dann für den Captain.
 - Geeignet für: Berechnungen, Fibonacci, Primzahlen, Statistiken, Datengenerierung, Konvertierungen, Sortierungen, Textverarbeitung.
-- NICHT geeignet für: Netzwerkzugriffe, Dateizugriffe, bereits durch andere Tools abgedeckte Aufgaben (Wetter, GitHub, etc.).
+- NICHT geeignet für: Netzwerkzugriffe, Dateizugriffe, plt.savefig(), plt.show(), matplotlib-Charts (werden von Jarvis intern als Bild generiert!), Wetter, Krypto, Aktien, GitHub.
+- NIEMALS matplotlib/chart-Scripts generieren – Jarvis sendet Charts bereits als echte Bilder direkt in Telegram.
 - Wenn Skripte bereits in der Library vorhanden sind ([Script Library Context] wird dir gezeigt), VERWENDE diese bevorzugt."""
     
     def add_message(self, user_id: int, role: str, content: str) -> None:

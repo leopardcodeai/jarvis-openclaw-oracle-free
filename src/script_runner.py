@@ -30,6 +30,8 @@ BLOCKED_PATTERNS = [
     r"open\s*\([^)]*['\"]a['\"]",   # open(..., "a")
     r"\beval\s*\(", r"\bexec\s*\(",
     r"\b__import__\s*\(",
+    r"\bplt\.savefig\b", r"\bplt\.show\b",  # no chart files
+    r"\bimport\s+matplotlib\b", r"\bfrom\s+matplotlib\b",  # charts handled internally
 ]
 
 
@@ -57,6 +59,15 @@ _init_db()
 
 # ── Safety ────────────────────────────────────────────────────────────────────
 
+def _syntax_check(code: str) -> tuple[bool, str]:
+    """Validate Python syntax before execution."""
+    try:
+        compile(code, "<jarvis_script>", "exec")
+        return True, ""
+    except SyntaxError as e:
+        return False, f"SyntaxError Zeile {e.lineno}: {e.msg}\n  → `{(e.text or '').strip()}`"
+
+
 def _safety_check(code: str) -> tuple[bool, str]:
     for pattern in BLOCKED_PATTERNS:
         if re.search(pattern, code):
@@ -67,6 +78,12 @@ def _safety_check(code: str) -> tuple[bool, str]:
 # ── Execution ─────────────────────────────────────────────────────────────────
 
 def _run_script_sync(code: str, args: list[str] | None = None) -> dict:
+    # Syntax check first
+    syntax_ok, syntax_err = _syntax_check(code)
+    if not syntax_ok:
+        return {"success": False, "error": f"Syntaxfehler im generierten Code:\n{syntax_err}",
+                "stdout": "", "stderr": "", "duration": 0}
+
     safe, reason = _safety_check(code)
     if not safe:
         return {"success": False, "error": f"Sicherheitsprüfung fehlgeschlagen: {reason}",
