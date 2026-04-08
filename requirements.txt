@@ -7,3 +7,5 @@ python-dotenv==1.0.1
 asyncio==3.4.3
 aiofiles==23.2.1
 duckduckgo-search==6.2.13
+yfinance==0.2.54
+wikipedia==1.4.0

@@ -14,6 +14,11 @@ from .conversation import conversations
 from .oracle_monitor import OracleMonitor
 from .youtube_monitor import YouTubeMonitor
 from .web_search import search, format_results_for_llm, format_results_for_telegram
+from .weather import get_weather, format_weather, format_weather_for_llm
+from .finance import get_crypto_price, get_stock_price, format_crypto, format_stock, format_for_llm as format_finance_llm, COINGECKO_IDS
+from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
+from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
+from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
 
 oracle_monitor: OracleMonitor | None = None
 youtube_monitor: YouTubeMonitor | None = None
@@ -155,28 +160,154 @@ async def resetprompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("✅ System-Prompt auf Standard zurückgesetzt.")
 
 
-SEARCH_TRIGGERS = [
-    "such", "google", "finde", "search", "was ist", "wer ist",
-    "aktuell", "heute", "news", "neueste", "preis", "wetter",
-    "wann", "wie viel", "wie viele", "aktienkurs"
-]
+WEATHER_TRIGGERS = ["wetter", "temperatur", "regenschirm", "regen", "grad", "wind", "forecast", "vorhersage", "schnee", "hitze"]
+CRYPTO_TRIGGERS = list(COINGECKO_IDS.keys()) + ["krypto", "crypto", "coin"]
+STOCK_TRIGGERS = ["aktie", "aktien", "stock", "kurs", "börse", "nasdaq", "dax"]
+WIKI_TRIGGERS = ["erkläre", "erklar", "erklär", "was ist", "wer ist", "wer war", "definition", "bedeutung", "wikipedia", "wie funktioniert"]
+SEARCH_TRIGGERS = ["such", "news", "neueste", "aktuell", "heute", "preis", "wann", "wie viel", "wie viele"]
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /search <query> command."""
     if not is_authorized(update.effective_user.id):
         return
-
     query = " ".join(context.args)
     if not query:
         await update.message.reply_text("Verwendung: `/search <Suchbegriff>`", parse_mode="Markdown")
         return
-
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     results = await search(query)
     msg = format_results_for_telegram(query, results)
     if len(msg) > 4000:
         msg = msg[:4000] + "\n\n_(Ergebnisse gekürzt)_"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /weather <city> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    city = " ".join(context.args) or "München"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await get_weather(city)
+    if data:
+        await update.message.reply_text(format_weather(data), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Stadt '{city}' nicht gefunden.")
+
+
+async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /crypto <coin> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    coin = " ".join(context.args).lower() or "bitcoin"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await get_crypto_price(coin)
+    if data:
+        await update.message.reply_text(format_crypto(data), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Krypto '{coin}' nicht gefunden.")
+
+
+async def stocks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stocks <ticker> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    ticker = " ".join(context.args).upper() or "AAPL"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await get_stock_price(ticker)
+    if data:
+        await update.message.reply_text(format_stock(data), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Aktie '{ticker}' nicht gefunden.")
+
+
+async def remember_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /remember <category> <text> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Verwendung: `/remember <text>` oder `/remember shopping Milch kaufen`\n"
+            "Kategorien: note, shopping, reminder, idea, todo, link, info",
+            parse_mode="Markdown"
+        )
+        return
+    categories = ["note", "shopping", "reminder", "idea", "todo", "link", "info"]
+    if args[0].lower() in categories:
+        category = args[0].lower()
+        content = " ".join(args[1:])
+    else:
+        category = "note"
+        content = " ".join(args)
+    if not content:
+        await update.message.reply_text("❌ Kein Inhalt angegeben.")
+        return
+    mem_id = await add_memory(update.effective_user.id, content, category)
+    await update.message.reply_text(f"🧠 Gespeichert als `#{mem_id}` [{category}]: {content}", parse_mode="Markdown")
+
+
+async def recall_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /recall [query] command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    query = " ".join(context.args)
+    user_id = update.effective_user.id
+    if query:
+        entries = await search_memories(user_id, query)
+        msg = format_memories(entries, f"Suche: {query}")
+    else:
+        entries = await list_memories(user_id, limit=15)
+        msg = format_memories(entries, "Letzte Erinnerungen")
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /forget <id> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Verwendung: `/forget <ID>`", parse_mode="Markdown")
+        return
+    mem_id = int(context.args[0])
+    deleted = await delete_memory(update.effective_user.id, mem_id)
+    if deleted:
+        await update.message.reply_text(f"🗑️ Erinnerung `#{mem_id}` gelöscht.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Erinnerung `#{mem_id}` nicht gefunden.", parse_mode="Markdown")
+
+
+async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /wiki <topic> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("Verwendung: `/wiki <Thema>`", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await wiki_search(query)
+    msg = format_wiki(data)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n\n_(Artikel gekürzt)_"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def sys_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /sys <command> command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    cmd = " ".join(context.args)
+    if not cmd:
+        cmds = "\n".join(f"• `{k}`" for k in ALLOWED_COMMAND_KEYS)
+        await update.message.reply_text(f"🖥️ *Verfügbare Befehle:*\n{cmds}", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await sys_run(cmd)
+    msg = sys_format_result(result, cmd)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
@@ -195,16 +326,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Auto web search if message contains trigger words
-    search_context = ""
+    # Auto tool detection based on message content
+    context_parts = []
     msg_lower = user_message.lower()
-    if any(trigger in msg_lower for trigger in SEARCH_TRIGGERS):
+
+    # Weather detection
+    if any(t in msg_lower for t in WEATHER_TRIGGERS):
+        import re
+        city_match = re.search(r'in ([A-ZÄÖÜ][a-zäöüß]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)', user_message)
+        city = city_match.group(1) if city_match else "München"
+        weather_data = await get_weather(city)
+        if weather_data:
+            context_parts.append(format_weather_for_llm(weather_data))
+            logger.info(f"Auto-weather: {city}")
+
+    # Crypto detection
+    if any(t in msg_lower for t in CRYPTO_TRIGGERS):
+        for coin in CRYPTO_TRIGGERS:
+            if coin in msg_lower and len(coin) > 2:
+                crypto_data = await get_crypto_price(coin)
+                if crypto_data:
+                    context_parts.append(format_finance_llm(crypto_data, "crypto"))
+                    logger.info(f"Auto-crypto: {coin}")
+                    break
+
+    # Stock detection
+    if any(t in msg_lower for t in STOCK_TRIGGERS):
+        import re
+        tickers = re.findall(r'\b([A-Z]{2,5})\b', user_message)
+        for ticker in tickers[:2]:
+            stock_data = await get_stock_price(ticker)
+            if stock_data and stock_data.get("price"):
+                context_parts.append(format_finance_llm(stock_data, "stock"))
+                logger.info(f"Auto-stock: {ticker}")
+                break
+
+    # Wikipedia detection
+    if any(t in msg_lower for t in WIKI_TRIGGERS):
+        wiki_data = await wiki_search(user_message, sentences=4)
+        if wiki_data["success"]:
+            context_parts.append(format_wiki_for_llm(wiki_data))
+            logger.info(f"Auto-wiki: {user_message[:40]}")
+
+    # Web search fallback
+    if not context_parts and any(t in msg_lower for t in SEARCH_TRIGGERS):
         results = await search(user_message, max_results=3)
         if results:
-            search_context = "\n\n[Aktuelle Web-Infos]\n" + format_results_for_llm(user_message, results)
-            logger.info(f"Auto-search triggered for: {user_message[:40]}")
-    
-    # Add user message to history (with search context if found)
+            context_parts.append(format_results_for_llm(user_message, results))
+            logger.info(f"Auto-search: {user_message[:40]}")
+
+    # Build full message with context
+    search_context = "\n\n" + "\n\n".join(context_parts) if context_parts else ""
     full_message = user_message + search_context if search_context else user_message
     conversations.add_message(user_id, "user", full_message)
     
@@ -289,6 +461,14 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("heartbeat", heartbeat_command))
     application.add_handler(CommandHandler("search", search_command))
+    application.add_handler(CommandHandler("weather", weather_command))
+    application.add_handler(CommandHandler("crypto", crypto_command))
+    application.add_handler(CommandHandler("stocks", stocks_command))
+    application.add_handler(CommandHandler("remember", remember_command))
+    application.add_handler(CommandHandler("recall", recall_command))
+    application.add_handler(CommandHandler("forget", forget_command))
+    application.add_handler(CommandHandler("wiki", wiki_command))
+    application.add_handler(CommandHandler("sys", sys_command))
     application.add_handler(CommandHandler("setprompt", setprompt_command))
     application.add_handler(CommandHandler("resetprompt", resetprompt_command))
     
