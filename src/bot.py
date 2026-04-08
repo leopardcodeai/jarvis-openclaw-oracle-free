@@ -19,6 +19,13 @@ from .finance import get_crypto_price, get_stock_price, format_crypto, format_st
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
+from .github_tool import (
+    search_repos as gh_search_repos, search_code as gh_search_code,
+    get_repo_info as gh_repo_info, read_file as gh_read_file,
+    list_prs as gh_list_prs, list_issues as gh_list_issues,
+    edit_file_pr as gh_edit_pr, push_direct as gh_push,
+    format_repo_info, format_search_repos, format_prs, format_issues,
+)
 
 oracle_monitor: OracleMonitor | None = None
 youtube_monitor: YouTubeMonitor | None = None
@@ -311,6 +318,200 @@ async def sys_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+def _gh_token() -> str | None:
+    return settings.github_token
+
+
+def _resolve_repo(args: list[str], default_owner: str) -> str:
+    """Resolve 'repo' or 'owner/repo' from args."""
+    if not args:
+        return ""
+    name = args[0]
+    if "/" in name:
+        return name
+    return f"{default_owner}/{name}"
+
+
+async def ghsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghsearch <query> – search GitHub repos."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    if not token:
+        await update.message.reply_text("❌ Kein GitHub-Token konfiguriert.")
+        return
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("Verwendung: `/ghsearch <Suchbegriff>`", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    results = await gh_search_repos(token, query)
+    msg = format_search_repos(results)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n_(gekürzt)_"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def ghrepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghrepo <owner/repo> – repo info."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    if not token:
+        await update.message.reply_text("❌ Kein GitHub-Token konfiguriert.")
+        return
+    repo = _resolve_repo(context.args, settings.github_default_owner)
+    if not repo:
+        await update.message.reply_text("Verwendung: `/ghrepo <repo>` oder `/ghrepo owner/repo`", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await gh_repo_info(token, repo)
+    if data:
+        msg = format_repo_info(data)
+        if len(msg) > 4000:
+            msg = msg[:4000] + "\n_(gekürzt)_"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Repo `{repo}` nicht gefunden.", parse_mode="Markdown")
+
+
+async def ghfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghfile <owner/repo> <path> [branch] – read file."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    if not token:
+        await update.message.reply_text("❌ Kein GitHub-Token konfiguriert.")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Verwendung: `/ghfile <repo> <pfad> [branch]`", parse_mode="Markdown")
+        return
+    repo = _resolve_repo([context.args[0]], settings.github_default_owner)
+    path = context.args[1]
+    ref = context.args[2] if len(context.args) > 2 else "main"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    data = await gh_read_file(token, repo, path, ref)
+    if not data:
+        await update.message.reply_text(f"❌ Datei `{path}` nicht gefunden.", parse_mode="Markdown")
+        return
+    if "error" in data:
+        await update.message.reply_text(f"❌ {data['error']}", parse_mode="Markdown")
+        return
+    content = data["content"]
+    header = f"📄 `{repo}/{path}` (branch: `{ref}`)\n\n"
+    body = f"```\n{content[:3500]}\n```"
+    if len(content) > 3500:
+        body += "\n_(Datei gekürzt)_"
+    await update.message.reply_text(header + body, parse_mode="Markdown")
+
+
+async def ghprs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghprs <owner/repo> – list PRs."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    repo = _resolve_repo(context.args, settings.github_default_owner)
+    if not repo:
+        await update.message.reply_text("Verwendung: `/ghprs <repo>`", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    prs = await gh_list_prs(token, repo)
+    await update.message.reply_text(format_prs(prs, repo), parse_mode="Markdown")
+
+
+async def ghissues_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghissues <owner/repo> – list issues."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    repo = _resolve_repo(context.args, settings.github_default_owner)
+    if not repo:
+        await update.message.reply_text("Verwendung: `/ghissues <repo>`", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    issues = await gh_list_issues(token, repo)
+    await update.message.reply_text(format_issues(issues, repo), parse_mode="Markdown")
+
+
+async def ghedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghedit <repo> <path> <branch> <commit_msg> | <content> – edit file + create PR."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    if not token:
+        await update.message.reply_text("❌ Kein GitHub-Token konfiguriert.")
+        return
+    text = update.message.text
+    # Parse: /ghedit repo path branch commit_msg | file content
+    if "|" not in text:
+        await update.message.reply_text(
+            "Verwendung:\n`/ghedit <repo> <pfad> <branch> <commit msg> | <dateiinhalt>`\n\n"
+            "Beispiel:\n`/ghedit openclaw-oracle-free README.md jarvis/update Update README | # Neuer Titel`",
+            parse_mode="Markdown"
+        )
+        return
+    parts = text.split("|", 1)
+    header_parts = parts[0].strip().split()[1:]  # remove /ghedit
+    new_content = parts[1].strip()
+    if len(header_parts) < 3:
+        await update.message.reply_text("❌ Zu wenige Argumente. Siehe /ghedit ohne Argumente.", parse_mode="Markdown")
+        return
+    repo = _resolve_repo([header_parts[0]], settings.github_default_owner)
+    path = header_parts[1]
+    branch = header_parts[2]
+    commit_msg = " ".join(header_parts[3:]) if len(header_parts) > 3 else "Jarvis edit"
+    pr_title = f"[Jarvis] {commit_msg}"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await gh_edit_pr(token, repo, path, new_content, branch, commit_msg, pr_title)
+    if result["success"]:
+        await update.message.reply_text(
+            f"✅ *PR erstellt!*\n\n"
+            f"🌿 Branch: `{result['branch']}`\n"
+            f"🔗 {result['pr_url']}",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(f"❌ Fehler: {result['error']}")
+
+
+async def ghpush_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ghpush <repo> <path> <branch> <commit_msg> | <content> – push directly."""
+    if not is_authorized(update.effective_user.id):
+        return
+    token = _gh_token()
+    if not token:
+        await update.message.reply_text("❌ Kein GitHub-Token konfiguriert.")
+        return
+    text = update.message.text
+    if "|" not in text:
+        await update.message.reply_text(
+            "Verwendung:\n`/ghpush <repo> <pfad> <branch> <commit msg> | <inhalt>`",
+            parse_mode="Markdown"
+        )
+        return
+    parts = text.split("|", 1)
+    header_parts = parts[0].strip().split()[1:]
+    new_content = parts[1].strip()
+    if len(header_parts) < 3:
+        await update.message.reply_text("❌ Zu wenige Argumente.", parse_mode="Markdown")
+        return
+    repo = _resolve_repo([header_parts[0]], settings.github_default_owner)
+    path = header_parts[1]
+    branch = header_parts[2]
+    commit_msg = " ".join(header_parts[3:]) if len(header_parts) > 3 else "Jarvis push"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await gh_push(token, repo, path, new_content, commit_msg, branch)
+    if result["success"]:
+        await update.message.reply_text(
+            f"✅ *Gepusht!*\n\n"
+            f"🔀 Commit: `{result['sha']}`\n"
+            f"🔗 {result['url']}",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(f"❌ Fehler: {result['error']}")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages."""
     user = update.effective_user
@@ -469,6 +670,13 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
+    application.add_handler(CommandHandler("ghsearch", ghsearch_command))
+    application.add_handler(CommandHandler("ghrepo", ghrepo_command))
+    application.add_handler(CommandHandler("ghfile", ghfile_command))
+    application.add_handler(CommandHandler("ghprs", ghprs_command))
+    application.add_handler(CommandHandler("ghissues", ghissues_command))
+    application.add_handler(CommandHandler("ghedit", ghedit_command))
+    application.add_handler(CommandHandler("ghpush", ghpush_command))
     application.add_handler(CommandHandler("setprompt", setprompt_command))
     application.add_handler(CommandHandler("resetprompt", resetprompt_command))
     

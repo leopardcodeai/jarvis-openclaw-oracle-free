@@ -9,3 +9,4 @@ aiofiles==23.2.1
 duckduckgo-search==6.2.13
 yfinance==0.2.54
 wikipedia==1.4.0
+PyGithub==2.3.0

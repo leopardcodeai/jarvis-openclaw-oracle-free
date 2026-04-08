@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:e2b"
     
+    # GitHub
+    github_token: Optional[str] = None
+    github_default_owner: str = "alexanderbrunker-star"
+
     # Tailscale
     tailscale_auth_key: Optional[str] = None
     tailscale_hostname: str = "jarvis-oracle"
