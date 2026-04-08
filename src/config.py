@@ -6,9 +6,13 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
     
-    # OpenRouter (Primary LLM)
+    # Google Gemini (Primary LLM)
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
+    
+    # OpenRouter (Secondary LLM)
     openrouter_api_key: str
-    openrouter_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    openrouter_model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
     
     # Ollama (Fallback LLM)
     ollama_host: str = "http://localhost:11434"

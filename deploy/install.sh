@@ -15,6 +15,26 @@ sudo apt update && sudo apt upgrade -y
 echo "🐍 Installing Python..."
 sudo apt install -y python3 python3-pip python3-venv git curl
 
+# Install Tailscale
+echo "🔐 Installing Tailscale..."
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo systemctl enable tailscaled
+sudo systemctl start tailscaled
+
+# Connect to Tailscale network
+if [ -n "$TAILSCALE_AUTH_KEY" ]; then
+    echo "🔗 Connecting to Tailscale as ${TAILSCALE_HOSTNAME:-jarvis-oracle}..."
+    sudo tailscale up \
+        --authkey="$TAILSCALE_AUTH_KEY" \
+        --hostname="${TAILSCALE_HOSTNAME:-jarvis-oracle}" \
+        --accept-routes \
+        --ssh
+    echo "✅ Tailscale connected!"
+    echo "   Tailscale IP: $(tailscale ip -4)"
+else
+    echo "⚠️  TAILSCALE_AUTH_KEY nicht gesetzt - überspringe Tailscale-Verbindung"
+fi
+
 # Install Ollama
 echo "🦙 Installing Ollama..."
 curl -fsSL https://ollama.com/install.sh | sh
@@ -75,13 +95,13 @@ fi
 echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "📋 Next steps:"
-echo "1. Edit your .env file: nano $APP_DIR/.env"
-echo "2. Add your Telegram Bot Token (from @BotFather)"
-echo "3. Add your OpenRouter API Key (from openrouter.ai)"
-echo "4. Start the bot: cd $APP_DIR && source venv/bin/activate && python main.py"
+echo "📋 System Status:"
+echo "   Tailscale IP : $(tailscale ip -4 2>/dev/null || echo 'nicht verbunden')"
+echo "   Ollama       : $(systemctl is-active ollama)"
+echo "   OpenClaw Dir : $APP_DIR"
 echo ""
-echo "Or use the systemd service:"
+echo "📋 Next steps:"
+echo "1. Bot starten: cd $APP_DIR && source venv/bin/activate && python main.py"
+echo "Or als Service:"
 echo "   sudo cp deploy/openclaw.service /etc/systemd/system/"
-echo "   sudo systemctl enable openclaw"
-echo "   sudo systemctl start openclaw"
+echo "   sudo systemctl enable openclaw && sudo systemctl start openclaw"

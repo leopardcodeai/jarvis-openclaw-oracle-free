@@ -41,6 +41,22 @@ ssh -i "$SSH_KEY" "$USER@$SERVER_IP" << 'EOF'
     echo "Files extracted to ~/openclaw"
 EOF
 
+# Upload .env securely (never committed to git)
+if [ -f ".env" ]; then
+    echo "🔐 Uploading .env securely..."
+    scp -i "$SSH_KEY" .env "$USER@$SERVER_IP:~/openclaw/.env"
+    echo "✅ .env uploaded"
+fi
+
+# Run installer with env vars
+echo "🚀 Running installer on server..."
+ssh -i "$SSH_KEY" "$USER@$SERVER_IP" << 'EOF'
+    cd ~/openclaw
+    source .env 2>/dev/null || true
+    export $(grep -v '^#' .env | xargs) 2>/dev/null || true
+    ./deploy/install.sh
+EOF
+
 echo ""
 echo "✅ Upload complete!"
 echo ""

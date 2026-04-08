@@ -11,6 +11,9 @@ from telegram.ext import (
 from .config import settings
 from .llm_router import router
 from .conversation import conversations
+from .oracle_monitor import OracleMonitor
+
+oracle_monitor: OracleMonitor | None = None
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -33,9 +36,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ Du bist nicht berechtigt, diesen Bot zu nutzen.")
         return
     
-    welcome_text = f"""👋 Hallo {user.first_name}!
+    welcome_text = f"""🎖️ Guten Tag, Captain Leopard!
 
-Ich bin **OpenClaw**, dein persönlicher AI-Assistent.
+Ich bin **Jarvis**, Ihr persönlicher AI-Assistent. Zu Ihren Diensten.
 
 **Befehle:**
 /start - Diese Nachricht anzeigen
@@ -43,7 +46,7 @@ Ich bin **OpenClaw**, dein persönlicher AI-Assistent.
 /status - System-Status prüfen
 /help - Hilfe anzeigen
 
-Schreib mir einfach eine Nachricht und ich helfe dir! 🚀"""
+Was kann ich für Sie tun, Captain? 🦾"""
     
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
@@ -53,9 +56,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not is_authorized(update.effective_user.id):
         return
     
-    help_text = """📚 **OpenClaw Hilfe**
+    help_text = """📚 **Jarvis Hilfe**
 
-**Was kann ich?**
+**Was kann ich für Sie tun, Captain?**
 • Fragen beantworten
 • Texte schreiben & übersetzen
 • Ideen brainstormen
@@ -68,7 +71,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • `/setprompt <text>` - Setzt einen eigenen System-Prompt
 • `/resetprompt` - Setzt den Standard-Prompt zurück
 
-**Tipp:** Ich merke mir den Kontext unseres Gesprächs. Nutze /clear für ein frisches Gespräch."""
+**Tipp:** Ich merke mir den Kontext unseres Gesprächs. Nutzen Sie /clear für ein frisches Gespräch, Captain."""
     
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -81,7 +84,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     conversations.clear_history(user_id)
-    await update.message.reply_text("🧹 Gesprächsverlauf gelöscht. Wir starten frisch!")
+    await update.message.reply_text("🧹 Gesprächsverlauf gelöscht, Captain. Wir starten frisch!")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -93,19 +96,22 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     health = await router.health_check()
     
+    gemini_status = "✅ Online" if health["gemini"] else "❌ Offline"
     openrouter_status = "✅ Online" if health["openrouter"] else "❌ Offline"
     ollama_status = "✅ Online" if health["ollama"] else "❌ Offline"
     
-    status_text = f"""📊 **System-Status**
+    status_text = f"""📊 **System-Status, Captain**
 
-**OpenRouter (Primary):** {openrouter_status}
+**Google Gemini (Primary):** {gemini_status}
+  Model: `{settings.gemini_model}`
+
+**OpenRouter (Secondary):** {openrouter_status}
   Model: `{settings.openrouter_model}`
 
 **Ollama (Fallback):** {ollama_status}
   Model: `{settings.ollama_model}`
-  Host: `{settings.ollama_host}`
 
-**Routing:** OpenRouter → Ollama Fallback"""
+**Routing:** Gemini → OpenRouter → Ollama"""
     
     await update.message.reply_text(status_text, parse_mode="Markdown")
 
@@ -191,6 +197,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(reply_text, parse_mode="Markdown")
 
 
+async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /heartbeat command."""
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
+    if oracle_monitor:
+        msg = await oracle_monitor.send_heartbeat()
+    else:
+        msg = "⚠️ Oracle Monitor nicht aktiv."
+    
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors."""
     logger.error(f"Error: {context.error}")
@@ -201,15 +222,31 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+async def post_init(application: Application) -> None:
+    """Start background tasks after bot initializes."""
+    global oracle_monitor
+    allowed = settings.allowed_users
+    if allowed:
+        oracle_monitor = OracleMonitor(application.bot, allowed[0])
+        oracle_monitor.start()
+        logger.info(f"Oracle monitor started, will notify {allowed[0]}")
+
+
 def create_application() -> Application:
     """Create and configure the bot application."""
-    application = Application.builder().token(settings.telegram_bot_token).build()
+    application = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .post_init(post_init)
+        .build()
+    )
     
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("heartbeat", heartbeat_command))
     application.add_handler(CommandHandler("setprompt", setprompt_command))
     application.add_handler(CommandHandler("resetprompt", resetprompt_command))
     
