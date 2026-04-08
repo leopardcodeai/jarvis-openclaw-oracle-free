@@ -19,6 +19,7 @@ from .finance import get_crypto_price, get_stock_price, format_crypto, format_st
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
+from .charts import crypto_chart, stock_chart, format_chart_summary, COINGECKO_IDS as CHART_COIN_IDS, PERIOD_DAYS
 from .github_tool import (
     search_repos as gh_search_repos, search_code as gh_search_code,
     get_repo_info as gh_repo_info, read_file as gh_read_file,
@@ -318,6 +319,63 @@ async def sys_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+CHART_TRIGGERS = ["verlauf", "chart", "graph", "entwicklung", "historisch", "history",
+                  "letztes jahr", "letzten monat", "letzten wochen", "letzten 30", "letzten 7",
+                  "wie war", "wie lief", "performance", "rendite", "kurs verlauf"]
+
+
+async def _send_chart(update: Update, context, kind: str, symbol: str, period: str):
+    """Generate and send a chart image with text summary."""
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
+    if kind == "crypto":
+        buf, meta = await crypto_chart(symbol, period)
+    else:
+        buf, meta = await stock_chart(symbol, period)
+
+    if buf is None:
+        await update.message.reply_text(f"❌ Keine Daten für `{symbol.upper()}` ({period}) gefunden.",
+                                        parse_mode="Markdown")
+        return None
+
+    caption = format_chart_summary(meta, kind)
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=buf,
+        caption=caption,
+        parse_mode="Markdown"
+    )
+    return meta
+
+
+async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /chart <symbol> [period] – generate price chart.
+    Examples: /chart btc 1y   /chart TSLA 6m   /chart ethereum 3m
+    Periods: 7d, 1m, 3m, 6m, 1y, 2y, 5y (default: 1y)
+    """
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Verwendung: `/chart <symbol> [zeitraum]`\n\n"
+            "Beispiele:\n"
+            "`/chart btc 1y` – Bitcoin letztes Jahr\n"
+            "`/chart eth 3m` – Ethereum letzte 3 Monate\n"
+            "`/chart TSLA 6m` – Tesla letzte 6 Monate\n\n"
+            "Zeiträume: `7d` `1m` `3m` `6m` `1y` `2y` `5y`",
+            parse_mode="Markdown"
+        )
+        return
+
+    symbol = context.args[0].lower()
+    period = context.args[1].lower() if len(context.args) > 1 else "1y"
+
+    if period not in PERIOD_DAYS:
+        period = "1y"
+
+    kind = "crypto" if symbol in CHART_COIN_IDS else "stock"
+    await _send_chart(update, context, kind, symbol, period)
+
+
 def _gh_token() -> str | None:
     return settings.github_token
 
@@ -531,6 +589,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context_parts = []
     msg_lower = user_message.lower()
 
+    # Chart detection – send image before LLM response
+    if any(t in msg_lower for t in CHART_TRIGGERS):
+        import re
+        # Detect period keyword in message
+        period = "1y"
+        period_map = {"woche": "7d", "7 tage": "7d", "7d": "7d",
+                      "monat": "1m", "30 tage": "1m", "1m": "1m",
+                      "3 monat": "3m", "3m": "3m",
+                      "6 monat": "6m", "6m": "6m",
+                      "jahr": "1y", "1 jahr": "1y", "1y": "1y",
+                      "2 jahr": "2y", "5 jahr": "5y"}
+        for kw, p in period_map.items():
+            if kw in msg_lower:
+                period = p
+                break
+        # Detect coin
+        for coin_key in CHART_COIN_IDS:
+            if coin_key in msg_lower and len(coin_key) > 2:
+                await _send_chart(update, context, "crypto", coin_key, period)
+                context_parts.append(f"[Chart gesendet: {coin_key.upper()} {period}]")
+                break
+        else:
+            # Detect stock ticker (2-5 uppercase letters)
+            tickers = re.findall(r'\b([A-Z]{2,5})\b', user_message)
+            for ticker in tickers[:1]:
+                await _send_chart(update, context, "stock", ticker, period)
+                context_parts.append(f"[Chart gesendet: {ticker} {period}]")
+                break
+
     # Weather detection
     if any(t in msg_lower for t in WEATHER_TRIGGERS):
         import re
@@ -674,6 +761,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
+    application.add_handler(CommandHandler("chart", chart_command))
     application.add_handler(CommandHandler("ghsearch", ghsearch_command))
     application.add_handler(CommandHandler("ghrepo", ghrepo_command))
     application.add_handler(CommandHandler("ghfile", ghfile_command))
