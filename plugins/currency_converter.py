@@ -17,7 +17,7 @@ async def run(query: str) -> str:
     to_cur   = match.group(3)
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(
                 f"https://api.frankfurter.app/latest?from={from_cur}&to={to_cur}"
             )
