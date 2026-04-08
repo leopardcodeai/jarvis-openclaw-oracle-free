@@ -19,6 +19,11 @@ from .finance import get_crypto_price, get_stock_price, format_crypto, format_st
 from .memory import add_memory, list_memories, search_memories, delete_memory, format_memories
 from .wikipedia_tool import wiki_search, format_wiki, format_wiki_for_llm
 from .sysadmin import run_command as sys_run, format_result as sys_format_result, ALLOWED_COMMAND_KEYS
+from .script_runner import (
+    run_code, save_script, search_scripts, list_scripts, get_script, delete_script,
+    update_last_output, extract_script_from_response,
+    format_scripts_list, format_run_result,
+)
 from .charts import (crypto_chart, stock_chart, format_chart_summary,
                      weather_chart, format_weather_chart_summary,
                      COINGECKO_IDS as CHART_COIN_IDS, PERIOD_DAYS, WEATHER_PERIODS)
@@ -420,6 +425,47 @@ async def tempgraph_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def scripts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /scripts – list all saved scripts."""
+    if not is_authorized(update.effective_user.id):
+        return
+    scripts = await list_scripts()
+    await update.message.reply_text(format_scripts_list(scripts), parse_mode="Markdown")
+
+
+async def runscript_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /runscript <name_or_id> – run a saved script."""
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Verwendung: `/runscript <name oder ID>`", parse_mode="Markdown")
+        return
+    id_or_name = context.args[0]
+    script = await get_script(id_or_name)
+    if not script:
+        await update.message.reply_text(f"❌ Kein Skript `{id_or_name}` gefunden.", parse_mode="Markdown")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await run_code(script["code"])
+    await update_last_output(script["name"], result.get("stdout", ""))
+    msg = format_run_result(result, script["name"])
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def delscript_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /delscript <name_or_id> – delete a saved script."""
+    if not is_authorized(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Verwendung: `/delscript <name oder ID>`", parse_mode="Markdown")
+        return
+    ok = await delete_script(context.args[0])
+    if ok:
+        await update.message.reply_text(f"🗑️ Skript `{context.args[0]}` gelöscht.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Skript `{context.args[0]}` nicht gefunden.", parse_mode="Markdown")
+
+
 def _gh_token() -> str | None:
     return settings.github_token
 
@@ -734,6 +780,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context_parts.append(format_results_for_llm(user_message, results))
             logger.info(f"Auto-search: {user_message[:40]}")
 
+    # Search script library for relevant scripts and add as context
+    lib_scripts = await search_scripts(user_message)
+    if lib_scripts:
+        lib_context = "[Script Library Context]\n"
+        for s in lib_scripts[:3]:
+            lib_context += (f"• `{s['name']}` ({s['tags'] or 'kein tag'}): {s['description'] or ''}"
+                            f" – zuletzt verwendet: {s['last_used'] or 'nie'}, "
+                            f"{s['use_count']}× genutzt\n")
+            if s.get("last_output"):
+                lib_context += f"  Letzter Output: {s['last_output'][:200]}\n"
+        context_parts.append(lib_context)
+
     # Store ONLY the clean user message in history (no tool context)
     conversations.add_message(user_id, "user", user_message)
 
@@ -755,18 +813,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"LLM error: {response.error}")
         await update.message.reply_text(error_msg)
         return
-    
+
+    # ── Script auto-execution ─────────────────────────────────────────────────
+    script_info = extract_script_from_response(response.content)
+    if script_info:
+        logger.info(f"Script detected: {script_info['name']}")
+
+        # Show the clean text (without code block) first if there is one
+        clean = script_info["clean_text"]
+        if clean:
+            await update.message.reply_text(
+                f"🐍 *Jarvis schreibt ein Skript: `{script_info['name']}`*",
+                parse_mode="Markdown"
+            )
+
+        # Execute the script
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        run_result = await run_code(script_info["code"])
+
+        # Save to library with output
+        output_str = run_result.get("stdout", "") or run_result.get("error", "")
+        await save_script(
+            name=script_info["name"],
+            description=user_message[:200],
+            tags=script_info.get("tags", ""),
+            code=script_info["code"],
+            last_output=output_str[:2000],
+        )
+
+        # Show execution result
+        exec_msg = format_run_result(run_result, script_info["name"])
+        if len(exec_msg) > 4000:
+            exec_msg = exec_msg[:4000] + "\n```\n_(gekürzt)_"
+        await update.message.reply_text(exec_msg, parse_mode="Markdown")
+
+        # Second LLM call: interpret the output for the user
+        if run_result["success"] and run_result.get("stdout"):
+            interp_messages = conversations.get_messages(user_id) + [{
+                "role": "user",
+                "content": (
+                    f"[Script `{script_info['name']}` wurde ausgeführt. Output:\n"
+                    f"```\n{run_result['stdout'][:2000]}\n```]\n"
+                    f"Fasse das Ergebnis präzise und verständlich für den Captain zusammen."
+                )
+            }]
+            interp = await router.chat(interp_messages, system_prompt)
+            if interp.success:
+                reply_text = interp.content
+                if len(reply_text) > 4000:
+                    reply_text = reply_text[:4000] + "\n_(gekürzt)_"
+                await update.message.reply_text(reply_text, parse_mode="Markdown")
+                conversations.add_message(user_id, "assistant", response.content + "\n\n" + interp.content)
+                return
+
+    # ── Normal response ───────────────────────────────────────────────────────
     # Add assistant response to history
     conversations.add_message(user_id, "assistant", response.content)
-    
-    # Send response with provider info
-    provider_emoji = "🌐" if response.provider == "openrouter" else "🏠"
-    
+
     # Telegram has a 4096 character limit
     reply_text = response.content
     if len(reply_text) > 4000:
         reply_text = reply_text[:4000] + "\n\n_(Nachricht gekürzt)_"
-    
+
     await update.message.reply_text(reply_text, parse_mode="Markdown")
 
 
@@ -832,6 +940,9 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("wiki", wiki_command))
     application.add_handler(CommandHandler("sys", sys_command))
+    application.add_handler(CommandHandler("scripts", scripts_command))
+    application.add_handler(CommandHandler("runscript", runscript_command))
+    application.add_handler(CommandHandler("delscript", delscript_command))
     application.add_handler(CommandHandler("chart", chart_command))
     application.add_handler(CommandHandler("tempgraph", tempgraph_command))
     application.add_handler(CommandHandler("ghsearch", ghsearch_command))
