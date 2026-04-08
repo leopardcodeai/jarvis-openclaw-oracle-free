@@ -101,7 +101,7 @@ class OracleMonitor:
         self.chat_id = chat_id
         self._task: asyncio.Task | None = None
         self._instance_found = False
-        self._check_interval = 3600  # 1 Stunde
+        self._check_interval = 60  # 1 Minute
 
     def start(self):
         """Start the background monitoring task."""
@@ -189,5 +189,5 @@ class OracleMonitor:
             f"{'💚' if instance['found'] else '💛'} *Heartbeat – {now}*\n\n"
             f"{oracle_section}"
             f"{yt_section}\n\n"
-            f"_Nächster automatischer Check in 1h_"
+            f"_Oracle: jede Minute | YouTube: stündlich_"
         )
