@@ -1,6 +1,6 @@
 # � Jarvis – Persönlicher AI-Assistent
 
-Ein selbst-gehosteter, voll ausgestatteter AI-Assistent auf Oracle Cloud Free Tier mit Telegram-Integration. Jarvis kennt dich als **Captain Leopard** und ist mit einer wachsenden Sammlung an Tools ausgestattet – komplett kostenlos.
+Ein selbst-gehosteter, voll ausgestatteter AI-Assistent auf Oracle Cloud Free Tier mit Telegram-Integration. Jarvis kennt dich als **leopardcode.ai CEO** und ist mit einer wachsenden Sammlung an Tools ausgestattet – komplett kostenlos.
 
 ## ✨ Features
 
@@ -39,7 +39,7 @@ _*Gemini API Key empfohlen für beste Performance_
 ```
 ┌──────────────┐     ┌───────────────────────┐
 │   Telegram   │────▶│       Jarvis Bot       │
-│   Captain    │◀────│   (Oracle Cloud ARM)   │
+│   CEO        │◀────│   (Oracle Cloud ARM)   │
 └──────────────┘     └───────────┬───────────┘
                                  │
               ┌──────────────────┼──────────────────┐

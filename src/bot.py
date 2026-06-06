@@ -66,7 +66,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ Du bist nicht berechtigt, diesen Bot zu nutzen.")
         return
     
-    welcome_text = f"""🎖️ Guten Tag, Captain Leopard!
+    welcome_text = f"""🎖️ Guten Tag, CEO!
 
 Ich bin **Jarvis**, Ihr persönlicher AI-Assistent. Zu Ihren Diensten.
 
@@ -76,7 +76,7 @@ Ich bin **Jarvis**, Ihr persönlicher AI-Assistent. Zu Ihren Diensten.
 /status - System-Status prüfen
 /help - Hilfe anzeigen
 
-Was kann ich für Sie tun, Captain? 🦾"""
+Was kann ich für Sie tun, CEO? 🦾"""
     
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
@@ -88,7 +88,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     help_text = """📚 **Jarvis Hilfe**
 
-**Was kann ich für Sie tun, Captain?**
+**Was kann ich für Sie tun, CEO?**
 • Fragen beantworten
 • Texte schreiben & übersetzen
 • Ideen brainstormen
@@ -101,7 +101,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • `/setprompt <text>` - Setzt einen eigenen System-Prompt
 • `/resetprompt` - Setzt den Standard-Prompt zurück
 
-**Tipp:** Ich merke mir den Kontext unseres Gesprächs. Nutzen Sie /clear für ein frisches Gespräch, Captain."""
+**Tipp:** Ich merke mir den Kontext unseres Gesprächs. Nutzen Sie /clear für ein frisches Gespräch, CEO."""
     
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -114,7 +114,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     conversations.clear_history(user_id)
-    await update.message.reply_text("🧹 Gesprächsverlauf gelöscht, Captain. Wir starten frisch!")
+    await update.message.reply_text("🧹 Gesprächsverlauf gelöscht, CEO. Wir starten frisch!")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -130,7 +130,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     openrouter_status = "✅ Online" if health["openrouter"] else "❌ Offline"
     ollama_status = "✅ Online" if health["ollama"] else "❌ Offline"
     
-    status_text = f"""📊 **System-Status, Captain**
+    status_text = f"""📊 **System-Status, CEO**
 
 **Google Gemini (Primary):** {gemini_status}
   Model: `{settings.gemini_model}`
@@ -968,7 +968,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 if weather_data:
                     context_parts.append(format_weather_for_llm(weather_data))
         else:
-            # No city detected → use Captain's home city Munich
+            # No city detected → use CEO's home city Munich
             weather_data = await get_weather("München")
             if weather_data:
                 context_parts.append(format_weather_for_llm(weather_data))
@@ -1176,7 +1176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 _hint = "Korrigiere den Fehler und schreibe das Script komplett neu mit [JARVIS_EXEC]."
             else:
                 _reason = f"Script lief durch, aber gab Text statt Bild zurück: `{_stdout[:100]}`"
-                _hint = ("Der Captain erwartet ein echtes Bild als Ausgabe (JARVIS_IMAGE:<base64>). "
+                _hint = ("Der CEO erwartet ein echtes Bild als Ausgabe (JARVIS_IMAGE:<base64>). "
                          "Schreibe das Script neu, das ein echtes Bild generiert und mit "
                          "`print('JARVIS_IMAGE:' + base64.b64encode(img_bytes).decode())` ausgibt.")
 
@@ -1254,7 +1254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, ove
                 "content": (
                     f"[Script `{script_info['name']}` wurde ausgeführt. Output:\n"
                     f"```\n{run_result['stdout'][:2000]}\n```]\n"
-                    f"Fasse das Ergebnis präzise und verständlich für den Captain zusammen."
+                    f"Fasse das Ergebnis präzise und verständlich für den CEO zusammen."
                 )
             }]
             interp = await router.chat(interp_messages, system_prompt)

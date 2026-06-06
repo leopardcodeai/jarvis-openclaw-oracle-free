@@ -135,14 +135,14 @@ class OracleMonitor:
             self._instance_found = True
             ip = status.get("ip", "unbekannt")
             msg = (
-                f"🎉 *Captain Leopard! Mission erfüllt!*\n\n"
+                f"🎉 *leopardcode.ai CEO! Mission erfüllt!*\n\n"
                 f"Ihr Oracle Cloud Server ist online!\n\n"
                 f"🖥 *Name:* `{status['name']}`\n"
                 f"🌐 *IP:* `{ip}`\n"
                 f"⚙️ *Shape:* `{status['shape']}`\n\n"
                 f"*SSH-Verbindung:*\n"
                 f"`ssh -i ~/.ssh/oracle_openclaw ubuntu@{ip}`\n\n"
-                f"Bereit für die Installation, Captain!"
+                f"Bereit für die Installation, CEO!"
             )
             await self.bot.send_message(
                 chat_id=self.chat_id,

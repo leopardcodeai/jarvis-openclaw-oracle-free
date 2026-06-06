@@ -40,6 +40,11 @@ Thumbs.db
 *.log
 logs/
 
+# User data (local databases & state)
+*.db
+youtube_state.json
+installed_packages.json
+
 # Keys & Certificates - NEVER commit these!
 *.pem
 *.key
