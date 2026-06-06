@@ -1,5 +1,7 @@
 # � Jarvis – Persönlicher AI-Assistent
 
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![AI Built](https://img.shields.io/badge/vibecoded-AI-purple)](https://github.com/leopardcodeai) [![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://python.org)
+
 Ein selbst-gehosteter, voll ausgestatteter AI-Assistent auf Oracle Cloud Free Tier mit Telegram-Integration. Jarvis kennt dich als **leopardcode.ai CEO** und ist mit einer wachsenden Sammlung an Tools ausgestattet – komplett kostenlos.
 
 ## ✨ Features
