@@ -52,3 +52,17 @@ installed_packages.json
 *.pfx
 id_rsa*
 id_ed25519*
+
+# AI Agents & Environment Configurations
+.agents/
+.claude/
+.gemini/
+.aionrs/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.python-version
+.eslintcache
+.mypy_cache/
+.pytest_cache/
