@@ -66,3 +66,27 @@ id_ed25519*
 .eslintcache
 .mypy_cache/
 .pytest_cache/
+
+# AI Agents & Environment Configurations
+.superpowers/
+.superbrain/
+.brain/
+.env.telegram-remote
+.browseruse-venv/
+.uv_cache/
+.vercel/
+.wrangler/
+.opencode/
+.platformio/
+.esphome/
+.pio/
+.pioenvs/
+.piolibdeps/
+.terraform/
+.terraform.lock.hcl
+.dart_tool/
+.flutter-plugins-dependencies
+.metadata
+.packages
+.pub-cache/
+.pub/
