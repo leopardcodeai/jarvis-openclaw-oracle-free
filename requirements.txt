@@ -1,0 +1,16 @@
+# OpenClaw - AI Assistant Dependencies
+python-telegram-bot==21.3
+httpx
+psutil>=5.9.0
+openai-whisper>=20231117
+pydantic==2.7.1
+pydantic-settings==2.2.1
+python-dotenv==1.0.1
+asyncio==3.4.3
+aiofiles==23.2.1
+duckduckgo-search==6.2.13
+yfinance==0.2.54
+wikipedia==1.4.0
+PyGithub==2.3.0
+matplotlib==3.9.2
+pandas==2.2.2

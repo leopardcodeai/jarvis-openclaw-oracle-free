@@ -1,0 +1,97 @@
+# Environment
+.env
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# User data (local databases & state)
+*.db
+youtube_state.json
+installed_packages.json
+
+# Keys & Certificates - NEVER commit these!
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# AI Agents & Environment Configurations
+.agents/
+.claude/
+.gemini/
+.aionrs/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.python-version
+.eslintcache
+.mypy_cache/
+.pytest_cache/
+
+# AI Agents & Environment Configurations
+.superpowers/
+.superbrain/
+.brain/
+.env.telegram-remote
+.browseruse-venv/
+.uv_cache/
+.vercel/
+.wrangler/
+.opencode/
+.platformio/
+.esphome/
+.pio/
+.pioenvs/
+.piolibdeps/
+.terraform/
+.terraform.lock.hcl
+.dart_tool/
+.flutter-plugins-dependencies
+.metadata
+.packages
+.pub-cache/
+.pub/
+
+# AI Agents & Environment Configurations
+.agent/
+.github/agents/
+.github/agent/

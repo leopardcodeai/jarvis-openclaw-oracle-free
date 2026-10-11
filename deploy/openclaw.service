@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenClaw AI Assistant Bot
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/openclaw
+Environment=PATH=/home/ubuntu/openclaw/venv/bin:/usr/bin
+ExecStart=/home/ubuntu/openclaw/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,401 @@
+"""
+Jarvis Script Runner – generates, saves, executes, and reuses Python scripts.
+"""
+
+import asyncio
+import logging
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+DB_PATH = Path(__file__).parent.parent / "jarvis_scripts.db"
+SCRIPTS_DIR = Path(__file__).parent.parent / "jarvis_scripts"
+SCRIPTS_DIR.mkdir(exist_ok=True)
+
+TIMEOUT_SECONDS = 15
+
+# Patterns blocked before execution
+BLOCKED_PATTERNS = [
+    # OS / shell execution
+    r"\bos\.system\b", r"\bos\.popen\b", r"\bsubprocess\b",
+    r"\bshutil\.rmtree\b", r"\bshutil\.move\b", r"\bos\.remove\b",
+    r"\bos\.unlink\b", r"\brm\s+-rf\b",
+    # File writes
+    r"open\s*\([^)]*['\"]w['\"]",
+    r"open\s*\([^)]*['\"]a['\"]",
+    # Code execution
+    r"\beval\s*\(", r"\bexec\s*\(",
+    r"\b__import__\s*\(",
+    # Matplotlib display (BytesIO output allowed)
+    r"plt\.savefig\s*\(['\"](?!.*BytesIO)",
+    r"\bplt\.show\b",
+    # Secret / env access
+    r"\bos\.environ\b", r"\bos\.getenv\b",
+    r"\bdotenv\b", r"load_dotenv",
+    # Sensitive file reads
+    r"open\s*\([^)]*['\"](?:\.env|config\.py|secrets?\.)",
+    # Pickle (arbitrary code via deserialization)
+    r"\bpickle\.loads?\b",
+    # Builtins manipulation
+    r"__builtins__\s*\[",
+]
+
+
+def _init_db():
+    con = sqlite3.connect(DB_PATH)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS scripts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT UNIQUE NOT NULL,
+            description TEXT,
+            tags        TEXT,
+            code        TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            last_used   TEXT,
+            use_count   INTEGER DEFAULT 0,
+            last_output TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+_init_db()
+
+
+# ── Safety ────────────────────────────────────────────────────────────────────
+
+def _fix_llm_code(code: str) -> str:
+    """Fix common LLM code-generation artifacts (merged lines, missing spaces)."""
+    import re as _re
+
+    split_lines = []
+    for line in code.splitlines():
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        prefix = ' ' * indent
+
+        # ── Fix 1: mid-line 'import' (e.g. "import numpy as npimport io, base64")
+        parts = _re.split(r'(?<=\w)(import\s+)', stripped)
+        if len(parts) > 1:
+            reconstructed = [parts[0]]
+            i = 1
+            while i < len(parts):
+                reconstructed.append(parts[i] + (parts[i+1] if i+1 < len(parts) else ""))
+                i += 2
+            split_lines.extend(prefix + p.strip() for p in reconstructed if p.strip())
+            continue
+
+        # ── Fix 2: merged statements separated by 4+ spaces
+        # e.g. "self.x = a        self.y = b" or "a = 1    b = 2"
+        # Only split if both halves look like statements (contain = or start with keyword)
+        _STMT_START = _re.compile(r'^(self\.|[a-zA-Z_]\w*\s*[\[=\(]|return |if |for |while |raise )')
+        if _re.search(r'\S {4,}\S', stripped):
+            chunks = _re.split(r' {4,}', stripped)
+            if len(chunks) > 1 and all(_STMT_START.match(c.strip()) for c in chunks if c.strip()):
+                split_lines.extend(prefix + c.strip() for c in chunks if c.strip())
+                continue
+
+        split_lines.append(line)
+
+    # ── Fix 3: missing space after def/class/from at line start
+    result = '\n'.join(split_lines)
+    result = _re.sub(r'^(\s*)def([A-Za-z_])', r'\1def \2', result, flags=_re.MULTILINE)
+    result = _re.sub(r'^(\s*)class([A-Za-z_])', r'\1class \2', result, flags=_re.MULTILINE)
+    result = _re.sub(r'^(\s*)from([A-Za-z_])', r'\1from \2', result, flags=_re.MULTILINE)
+
+    # ── Fix 4: keyword/definition embedded mid-word
+    # e.g. "endwhile", "OrderedDictclass LRU", "codecsplaintext"
+    _KW_PAT = (r'while|for|if|elif|else|return|yield|raise|break|continue|pass'
+               r'|with|try|except|finally|class|def|async|import')
+    lines2 = []
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        prefix = ' ' * indent
+        parts = _re.split(r'(?<=\w)(' + _KW_PAT + r'\b)', stripped)
+        if len(parts) > 1:
+            reconstructed, i = [parts[0]], 1
+            while i < len(parts):
+                reconstructed.append(parts[i] + (parts[i+1] if i+1 < len(parts) else ""))
+                i += 2
+            lines2.extend(prefix + p.strip() for p in reconstructed if p.strip())
+        else:
+            lines2.append(line)
+    result = '\n'.join(lines2)
+
+    # ── Fix 2b: merged statements with 4+ spaces where first is break/continue/pass/return
+    _STMT_START2 = _re.compile(
+        r'^(self\.|[a-zA-Z_]\w*\s*[\[=\(]|return |if |for |while |raise '
+        r'|break\b|continue\b|pass\b|print\()'
+    )
+    lines3 = []
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        indent2 = len(line) - len(stripped)
+        prefix2 = ' ' * indent2
+        if _re.search(r'\S {4,}\S', stripped):
+            chunks = _re.split(r' {4,}', stripped)
+            if len(chunks) > 1 and all(_STMT_START2.match(c.strip()) for c in chunks if c.strip()):
+                lines3.extend(prefix2 + c.strip() for c in chunks if c.strip())
+                continue
+        lines3.append(line)
+    return '\n'.join(lines3)
+
+
+def _syntax_check(code: str) -> tuple[bool, str]:
+    """Validate Python syntax before execution (auto-fix common LLM artifacts first)."""
+    fixed = _fix_llm_code(code)
+    try:
+        compile(fixed, "<jarvis_script>", "exec")
+        return True, ""
+    except SyntaxError as e:
+        return False, f"SyntaxError Zeile {e.lineno}: {e.msg}\n  → `{(e.text or '').strip()}`"
+
+
+def _safety_check(code: str) -> tuple[bool, str]:
+    for pattern in BLOCKED_PATTERNS:
+        if re.search(pattern, code):
+            return False, f"Geblockt: `{pattern}`"
+    return True, ""
+
+
+# ── Execution ─────────────────────────────────────────────────────────────────
+
+def _run_script_sync(code: str, args: list[str] | None = None) -> dict:
+    code = _fix_llm_code(code)  # normalize before execution
+    # Syntax check first
+    syntax_ok, syntax_err = _syntax_check(code)
+    if not syntax_ok:
+        return {"success": False, "error": f"Syntaxfehler im generierten Code:\n{syntax_err}",
+                "stdout": "", "stderr": "", "duration": 0}
+
+    safe, reason = _safety_check(code)
+    if not safe:
+        return {"success": False, "error": f"Sicherheitsprüfung fehlgeschlagen: {reason}",
+                "stdout": "", "stderr": "", "duration": 0}
+
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(code)
+        tmp_path = f.name
+
+    start = time.time()
+    try:
+        result = subprocess.run(
+            [sys.executable, tmp_path] + (args or []),
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            cwd=str(SCRIPTS_DIR),
+        )
+        duration = round(time.time() - start, 2)
+        stdout = result.stdout[:8000]
+        stderr = result.stderr[:2000]
+        return {
+            "success": result.returncode == 0,
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": result.returncode,
+            "duration": duration,
+            "error": stderr if result.returncode != 0 else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": f"Timeout nach {TIMEOUT_SECONDS}s",
+                "stdout": "", "stderr": "", "duration": TIMEOUT_SECONDS}
+    except Exception as e:
+        return {"success": False, "error": str(e),
+                "stdout": "", "stderr": "", "duration": 0}
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+async def run_code(code: str, args: list[str] | None = None) -> dict:
+    return await asyncio.get_event_loop().run_in_executor(None, _run_script_sync, code, args)
+
+
+# ── Library ───────────────────────────────────────────────────────────────────
+
+def _save_script_sync(name: str, description: str, tags: str, code: str, last_output: str = "") -> int:
+    con = sqlite3.connect(DB_PATH)
+    try:
+        now = datetime.now().isoformat()
+        con.execute("""
+            INSERT INTO scripts (name, description, tags, code, created_at, last_output)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                description=excluded.description,
+                tags=excluded.tags,
+                code=excluded.code,
+                last_used=excluded.created_at,
+                last_output=excluded.last_output,
+                use_count=use_count+1
+        """, (name, description, tags, code, now, last_output))
+        con.commit()
+        row = con.execute("SELECT id FROM scripts WHERE name=?", (name,)).fetchone()
+        return row[0] if row else -1
+    finally:
+        con.close()
+
+
+def _search_scripts_sync(query: str) -> list[dict]:
+    con = sqlite3.connect(DB_PATH)
+    try:
+        q = f"%{query.lower()}%"
+        rows = con.execute("""
+            SELECT id, name, description, tags, code, last_used, use_count, last_output
+            FROM scripts
+            WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ? OR LOWER(tags) LIKE ?
+            ORDER BY use_count DESC, last_used DESC
+            LIMIT 5
+        """, (q, q, q)).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def _list_scripts_sync() -> list[dict]:
+    con = sqlite3.connect(DB_PATH)
+    try:
+        rows = con.execute("""
+            SELECT id, name, description, tags, code, last_used, use_count, last_output
+            FROM scripts ORDER BY use_count DESC, last_used DESC
+        """).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def _get_script_sync(id_or_name: str | int) -> dict | None:
+    con = sqlite3.connect(DB_PATH)
+    try:
+        if isinstance(id_or_name, int) or str(id_or_name).isdigit():
+            row = con.execute(
+                "SELECT id,name,description,tags,code,last_used,use_count,last_output FROM scripts WHERE id=?",
+                (int(id_or_name),)
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT id,name,description,tags,code,last_used,use_count,last_output FROM scripts WHERE name=?",
+                (id_or_name,)
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+    finally:
+        con.close()
+
+
+def _delete_script_sync(id_or_name: str | int) -> bool:
+    con = sqlite3.connect(DB_PATH)
+    try:
+        if isinstance(id_or_name, int) or str(id_or_name).isdigit():
+            con.execute("DELETE FROM scripts WHERE id=?", (int(id_or_name),))
+        else:
+            con.execute("DELETE FROM scripts WHERE name=?", (id_or_name,))
+        con.commit()
+        return con.total_changes > 0
+    finally:
+        con.close()
+
+
+def _update_last_output_sync(name: str, output: str):
+    con = sqlite3.connect(DB_PATH)
+    try:
+        con.execute(
+            "UPDATE scripts SET last_output=?, last_used=?, use_count=use_count+1 WHERE name=?",
+            (output[:4000], datetime.now().isoformat(), name)
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _row_to_dict(row) -> dict:
+    return {
+        "id": row[0], "name": row[1], "description": row[2],
+        "tags": row[3], "code": row[4], "last_used": row[5],
+        "use_count": row[6], "last_output": row[7],
+    }
+
+
+async def save_script(name: str, description: str, tags: str, code: str, last_output: str = "") -> int:
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _save_script_sync, name, description, tags, code, last_output
+    )
+
+
+async def search_scripts(query: str) -> list[dict]:
+    return await asyncio.get_event_loop().run_in_executor(None, _search_scripts_sync, query)
+
+
+async def list_scripts() -> list[dict]:
+    return await asyncio.get_event_loop().run_in_executor(None, _list_scripts_sync)
+
+
+async def get_script(id_or_name) -> dict | None:
+    return await asyncio.get_event_loop().run_in_executor(None, _get_script_sync, id_or_name)
+
+
+async def delete_script(id_or_name) -> bool:
+    return await asyncio.get_event_loop().run_in_executor(None, _delete_script_sync, id_or_name)
+
+
+async def update_last_output(name: str, output: str):
+    await asyncio.get_event_loop().run_in_executor(None, _update_last_output_sync, name, output)
+
+
+# ── LLM response parser ───────────────────────────────────────────────────────
+
+EXEC_MARKER = re.compile(
+    r"\[JARVIS_EXEC:\s*name=([^\]|,]+)(?:,\s*tags=([^\]]+))?\]",
+    re.IGNORECASE
+)
+CODE_BLOCK = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
+
+
+def extract_script_from_response(text: str | None) -> dict | None:
+    """Extract script + metadata if LLM marked a block for execution."""
+    if not text:
+        return None
+    marker = EXEC_MARKER.search(text)
+    code_match = CODE_BLOCK.search(text)
+    if not marker or not code_match:
+        return None
+
+    name = marker.group(1).strip().replace(" ", "_").lower()[:40]
+    tags = marker.group(2).strip() if marker.group(2) else ""
+    code = code_match.group(1).strip()
+
+    # Remove marker + code block from display text
+    clean = EXEC_MARKER.sub("", text)
+    clean = CODE_BLOCK.sub("", clean).strip()
+
+    return {"name": name, "tags": tags, "code": code, "clean_text": clean}
+
+
+# ── Formatters ────────────────────────────────────────────────────────────────
+
+def format_scripts_list(scripts: list[dict]) -> str:
+    if not scripts:
+        return "📂 Keine Skripte in der Library."
+    lines = ["📂 *Jarvis Script Library:*\n"]
+    for s in scripts:
+        used = f", verwendet {s['use_count']}×" if s['use_count'] else ""
+        tags = f" `[{s['tags']}]`" if s['tags'] else ""
+        lines.append(f"*#{s['id']}* `{s['name']}`{tags}\n_{s['description'] or 'Kein Beschreibung'}_{used}\n")
+    return "\n".join(lines)
+
+
+def format_run_result(result: dict, script_name: str = "") -> str:
+    label = f"`{script_name}`" if script_name else "Skript"
+    if not result["success"]:
+        return f"❌ {label} fehlgeschlagen:\n```\n{result['error'][:800]}\n```"
+    out = result["stdout"] or "(kein Output)"
+    duration = result.get("duration", 0)
+    header = f"✅ {label} ausgeführt in {duration}s\n\n"
+    if len(out) > 3000:
+        out = out[:3000] + "\n...(gekürzt)"
+    return header + f"```\n{out}\n```"
